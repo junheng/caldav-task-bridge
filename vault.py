@@ -14,6 +14,7 @@ from models import is_task_note, normalize_path
 
 LOG = logging.getLogger(__name__)
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
+DEFAULT_CLIENT_NAME = "caldav-bridge"
 
 
 class FnsError(RuntimeError):
@@ -50,6 +51,7 @@ class FnsClient:
         session: requests.Session | None = None,
         timeout: float = 30,
         task_search_keyword: str = "type/task",
+        client_name: str = DEFAULT_CLIENT_NAME,
     ) -> None:
         base_url = api_url.rstrip("/")
         if not base_url.endswith("/api"):
@@ -60,6 +62,7 @@ class FnsClient:
         self.session = session or requests.Session()
         self.timeout = timeout
         self.task_search_keyword = task_search_keyword
+        self.client_name = client_name
 
     def list_notes(
         self,
@@ -157,6 +160,7 @@ class FnsClient:
         headers = {
             "Authorization": self.token,
             "token": self.token,
+            "X-Client": self.client_name,
             **headers,
         }
         response = self.session.request(

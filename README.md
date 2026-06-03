@@ -268,6 +268,7 @@ Body:
 
 - Radicale 已可通过 CalDAV/WebDAV URL 访问，且账号对 `/diomgis/tasks/` 和 `/diomgis/core-vault/` 有读写权限。
 - FNS 服务已可通过 HTTP 访问，Token 具备读笔记和修改 frontmatter 的权限。
+- 所有 FNS REST 请求都会携带 `X-Client: caldav-bridge`，便于 FNS 侧识别来源。
 - FNS vault 名称与 Obsidian/FNS 中的 vault 名称一致，例如 `Core`。
 - 任务笔记能被 FNS REST 搜索到。当前默认用 `TASK_SEARCH_KEYWORD=type/task` 搜索，然后再解析 frontmatter 判断是否为任务。
 - 运行环境能持久化 `SYNC_STATE_PATH`，否则每次重启都会丢失 sync-token、ETag 和 UID/path 映射。
