@@ -171,6 +171,7 @@ def is_task_note(path: str, content: str, frontmatter: dict[str, Any]) -> bool:
 
 def task_to_vtodo_ics(task: Task, vault_name: str, now: datetime | None = None) -> str:
     now = now or datetime.now(timezone.utc)
+    link = obsidian_url(vault_name, task.path)
     calendar = _calendar()
     todo = Todo()
     todo.add("uid", task.task_uid)
@@ -178,6 +179,7 @@ def task_to_vtodo_ics(task: Task, vault_name: str, now: datetime | None = None) 
     todo.add("status", STATUS_TO_CALDAV.get(task.status, "NEEDS-ACTION"))
     todo.add("priority", PRIORITY_TO_CALDAV.get(task.priority, 5))
     todo.add("description", build_description(task, vault_name))
+    todo.add("url", link)
     todo.add("x-obsidian-path", task.path)
     if task.tags:
         todo.add("categories", task.tags)
@@ -197,6 +199,7 @@ def task_to_vevent_ics(task: Task, vault_name: str, today: date | None = None) -
     today = today or date.today()
     overdue = task.due_date < today and not task.is_completed
     display_date = today if overdue else task.due_date
+    link = obsidian_url(vault_name, task.path)
     calendar = _calendar()
     event = Event()
     event.add("uid", task.event_uid)
@@ -204,7 +207,8 @@ def task_to_vevent_ics(task: Task, vault_name: str, today: date | None = None) -
     event.add("dtend", display_date + timedelta(days=1))
     prefix = "\U0001f6a8" if overdue else "\U0001f4cb"
     event.add("summary", f"{prefix} {task.title}")
-    event.add("description", obsidian_url(vault_name, task.path))
+    event.add("description", link)
+    event.add("url", link)
     event.add("status", "CANCELLED" if task.is_completed else "CONFIRMED")
     event.add("x-obsidian-path", task.path)
     calendar.add_component(event)
@@ -241,6 +245,11 @@ def component_obsidian_path(component: Any) -> str | None:
     custom = component.get("X-OBSIDIAN-PATH")
     if custom:
         return normalize_path(str(custom))
+    url = component.get("URL")
+    if url:
+        path = path_from_obsidian_url(str(url))
+        if path:
+            return path
     description = component.get("DESCRIPTION")
     if description:
         return path_from_description(str(description))
@@ -254,11 +263,23 @@ def path_from_description(description: str) -> str | None:
     for line in description.splitlines():
         if marker not in line:
             continue
-        parsed = urlparse(line.strip())
-        query = parse_qs(parsed.query)
-        values = query.get("file")
-        if values:
-            return normalize_path(unquote(values[0]))
+        path = _path_from_parsed_obsidian_url(urlparse(line.strip()))
+        if path:
+            return path
+    return None
+
+
+def path_from_obsidian_url(value: str) -> str | None:
+    return _path_from_parsed_obsidian_url(urlparse(value.strip()))
+
+
+def _path_from_parsed_obsidian_url(parsed: Any) -> str | None:
+    if parsed.scheme != "obsidian" or parsed.netloc != "open":
+        return None
+    query = parse_qs(parsed.query)
+    values = query.get("file")
+    if values:
+        return normalize_path(unquote(values[0]))
     return None
 
 

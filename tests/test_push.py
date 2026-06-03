@@ -6,7 +6,7 @@ from datetime import date
 
 from caldav_client import PutResult
 from fns_ws import NoteSyncMessage, NoteSyncResult
-from push import PushService
+from push import CALDAV_MAPPING_VERSION, PushService
 from state import SyncState
 from vault import FnsError, Note
 
@@ -87,6 +87,7 @@ class PushServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = SyncState.load(f"{tmp}/state.json")
             state.mark_initial_task_scan_completed()
+            state.set_caldav_mapping_version(CALDAV_MAPPING_VERSION)
             state.set_fns_note_sync_last_time(100)
             fns = FakeFns()
             fns_ws = FakeFnsWs()
@@ -116,6 +117,7 @@ class PushServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = SyncState.load(f"{tmp}/state.json")
             state.mark_initial_task_scan_completed()
+            state.set_caldav_mapping_version(CALDAV_MAPPING_VERSION)
             state.set_fns_note_sync_last_time(100)
             fns = FakeFns()
             fns.fail_paths.add("Tasks/Changed.md")
@@ -138,6 +140,23 @@ class PushServiceTests(unittest.TestCase):
 
             self.assertEqual(state.get_fns_pending_note_changes(), [])
             self.assertEqual(len(caldav.puts), 2)
+
+    def test_mapping_version_change_forces_one_initial_rescan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = SyncState.load(f"{tmp}/state.json")
+            state.mark_initial_task_scan_completed()
+            state.set_caldav_mapping_version(CALDAV_MAPPING_VERSION - 1)
+            fns = FakeFns()
+            fns_ws = FakeFnsWs()
+            fns_ws.cursor = 300
+            caldav = FakeCalDav()
+            service = _service(fns, caldav, state, fns_ws)
+
+            service.run_once()
+
+            self.assertEqual(fns.initial_called, 1)
+            self.assertEqual(state.get_caldav_mapping_version(), CALDAV_MAPPING_VERSION)
+            self.assertEqual(state.get_fns_note_sync_last_time(), 300)
 
 
 def _service(fns: FakeFns, caldav: FakeCalDav, state: SyncState, fns_ws: FakeFnsWs) -> PushService:

@@ -57,6 +57,7 @@ related_project: "[[项目名]]"
 | `scheduled_date` | `DTSTART;VALUE=DATE:<date>` | 计划开始日期 |
 | `title` (文件名) | `SUMMARY` | 任务标题 |
 | `assignee` + `related_project` | `DESCRIPTION` | 摘要信息 + `obsidian://open` 链接 |
+| 笔记链接 | `URL` | 可点击的 `obsidian://open` 链接 |
 | `tags` | `CATEGORIES` | 逗号分隔 |
 | vault 相对路径 | `X-OBSIDIAN-PATH` | 用于 CalDAV → Vault 写回；UID hash 不能反推出路径 |
 
@@ -71,6 +72,7 @@ related_project: "[[项目名]]"
 | `DTEND;VALUE=DATE` | `due_date + 1` |
 | `SUMMARY` | `📋 {title}`（逾期任务前缀 `🚨`） |
 | `DESCRIPTION` | `obsidian://open?vault=Core&file={path}` |
+| `URL` | 可点击的 `obsidian://open?vault=Core&file={path}` |
 | `STATUS` | `CONFIRMED`（未完成）/ `CANCELLED`（已完成） |
 | `X-OBSIDIAN-PATH` | vault 相对路径 |
 
@@ -124,6 +126,7 @@ related_project: "[[项目名]]"
    a. 计算 UID = md5(file_path)[:12]
    b. 构造 VTODO（icalendar Todo 对象）
       - 写入 UID、SUMMARY、STATUS、PRIORITY、DUE、DTSTART、DESCRIPTION、CATEGORIES
+      - 写入 URL，提供任务客户端可直接点击的 Obsidian 链接
       - 写入 X-OBSIDIAN-PATH，确保 pull 能定位原始笔记
    c. 查询 Radicale 中同 UID 对象
       - 存在 → CalDAV PUT 更新
@@ -202,6 +205,7 @@ UID 是稳定标识符，基于笔记路径。重命名笔记 → UID 变化 →
 4. **FNS 写回有明确 client**：所有 FNS REST 和 WS 请求都带 `X-Client: caldav-bridge` / `X-Client-Name: caldav-bridge`；部署侧可以在 FNS 日志中直接识别本服务请求。
 5. **持久化状态**：`SYNC_STATE_PATH` 保存 FNS WS note cursor、待重试 note path、每个 CalDAV collection 的 sync-token、对象 ETag 和 UID/path 映射。只要该文件持久化，服务重启后仍能继续做增量同步和条件写。
 6. **FNS-only 写回**：CalDAV → Vault 只调用 FNS frontmatter API。FNS 不可用时写回失败并重试，不直接改本地 vault 文件，避免绕过 FNS 造成多设备状态分叉。
+7. **CalDAV 映射版本化**：当 VTODO/VEVENT 生成规则升级时，服务会自动做一次任务扫描并重写 CalDAV 对象，确保已有任务也获得新的字段，例如可点击的 `URL`。
 
 已知边界：
 
@@ -256,8 +260,8 @@ Body:
 | `FNS_WS_URL` | 可选，FNS WebSocket 地址；不配置时由 `FNS_API_URL` 推导为 `/api/user/sync` | `wss://fns.example.com/api/user/sync` |
 | `FNS_CLIENT_TYPE` | 可选，FNS `X-Client` 值；token scope 需允许该 client | `caldav-bridge` |
 | `FNS_CLIENT_NAME` | 可选，FNS `X-Client-Name` 值 | `caldav-bridge` |
-| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.3` |
-| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.3` |
+| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.4` |
+| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.4` |
 | `TASK_PATH_KEYWORD` | 可选，初始化扫描时用于 FNS path 搜索的关键词 | `Tasks` |
 | `SYNC_STATE_PATH` | 可选，本服务同步状态文件路径 | `./data/state.json` |
 | `PUSH_INTERVAL` | 可选，Vault → CalDAV reconciliation 间隔（秒） | `900` |
@@ -335,7 +339,7 @@ docker run --rm --env-file .env caldav-task-bridge:local python scripts/smoke_te
 推荐发布时同时推送语义版本、短 SHA 和 `latest`：
 
 ```bash
-VERSION=0.1.3
+VERSION=0.1.4
 SHA=$(git rev-parse --short HEAD)
 
 docker build --network=host \

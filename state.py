@@ -78,6 +78,18 @@ class SyncState:
     def mark_initial_task_scan_completed(self) -> None:
         self.data.setdefault("fns", {})["initial_task_scan_completed"] = True
 
+    def get_caldav_mapping_version(self) -> int | None:
+        value = self.data.setdefault("fns", {}).get("caldav_mapping_version")
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def set_caldav_mapping_version(self, version: int) -> None:
+        self.data.setdefault("fns", {})["caldav_mapping_version"] = version
+
     def get_fns_note_sync_last_time(self) -> int | None:
         value = self.data.setdefault("fns", {}).get("note_sync_last_time")
         if value in (None, ""):

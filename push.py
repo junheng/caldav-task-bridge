@@ -12,6 +12,7 @@ from vault import FnsClient, FnsError, Note
 
 
 LOG = logging.getLogger(__name__)
+CALDAV_MAPPING_VERSION = 2
 
 
 @dataclass
@@ -90,13 +91,20 @@ class PushService:
             for path in paths:
                 yield PushCandidate(normalize_path(path))
             return
-        if not self.state.initial_task_scan_completed():
+        if self._needs_initial_task_scan():
             self.state.set_fns_note_sync_last_time(self._fns_ws().current_note_sync_cursor())
             for note in self.fns.iter_task_notes():
                 yield PushCandidate(note.path, note=note)
             self.state.mark_initial_task_scan_completed()
+            self.state.set_caldav_mapping_version(CALDAV_MAPPING_VERSION)
             return
         yield from self._changed_note_candidates_from_note_sync()
+
+    def _needs_initial_task_scan(self) -> bool:
+        return (
+            not self.state.initial_task_scan_completed()
+            or self.state.get_caldav_mapping_version() != CALDAV_MAPPING_VERSION
+        )
 
     def _get_note_or_skip(self, path: str, stats: PushStats) -> Note | None:
         try:
