@@ -17,6 +17,10 @@ class WebDavError(RuntimeError):
     pass
 
 
+class PreconditionFailed(WebDavError):
+    pass
+
+
 @dataclass(frozen=True)
 class CollectionObject:
     href: str
@@ -53,24 +57,32 @@ class CalDavClient:
         self.session.auth = (username, password)
         self.timeout = timeout
 
-    def put_object(self, collection: str, uid: str, ics_text: str) -> PutResult:
+    def put_object(self, collection: str, uid: str, ics_text: str, *, if_match: str | None = None) -> PutResult:
         url = self.object_url(collection, uid)
+        headers = {"Content-Type": "text/calendar; charset=utf-8"}
+        if if_match:
+            headers["If-Match"] = if_match
         response = self.session.put(
             url,
             data=ics_text.encode("utf-8"),
-            headers={"Content-Type": "text/calendar; charset=utf-8"},
+            headers=headers,
             timeout=self.timeout,
         )
+        if response.status_code == 412:
+            raise PreconditionFailed(f"PUT {url} failed because remote ETag changed")
         if response.status_code not in {200, 201, 204}:
             raise WebDavError(f"PUT {url} failed with HTTP {response.status_code}: {response.text}")
         etag = response.headers.get("ETag") or self._head_etag(url)
         return PutResult(href=_href_from_url(url), etag=etag, created=response.status_code == 201)
 
-    def delete_object(self, collection: str, uid: str) -> bool:
+    def delete_object(self, collection: str, uid: str, *, if_match: str | None = None) -> bool:
         url = self.object_url(collection, uid)
-        response = self.session.delete(url, timeout=self.timeout)
+        headers = {"If-Match": if_match} if if_match else None
+        response = self.session.delete(url, headers=headers, timeout=self.timeout)
         if response.status_code == 404:
             return False
+        if response.status_code == 412:
+            raise PreconditionFailed(f"DELETE {url} failed because remote ETag changed")
         if response.status_code not in {200, 202, 204}:
             raise WebDavError(f"DELETE {url} failed with HTTP {response.status_code}: {response.text}")
         return True

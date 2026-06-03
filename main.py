@@ -4,6 +4,7 @@ import argparse
 import logging
 import time
 from collections.abc import Callable
+from typing import TypeVar
 
 from caldav_client import CalDavClient
 from config import Settings
@@ -14,6 +15,7 @@ from vault import FnsClient
 
 
 LOG = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 def build_services(settings: Settings) -> tuple[PushService, PullService]:
@@ -47,9 +49,16 @@ def build_services(settings: Settings) -> tuple[PushService, PullService]:
 
 
 def run_once(mode: str, push_service: PushService, pull_service: PullService) -> None:
-    if mode in {"push", "both"}:
+    if mode == "both":
+        pull_stats = pull_service.run_once()
+        if _pull_saw_remote_changes(pull_stats):
+            LOG.info("skipping push in this cycle because pull saw CalDAV changes; next cycle will converge")
+            return
         push_service.run_once()
-    if mode in {"pull", "both"}:
+        return
+    if mode == "push":
+        push_service.run_once()
+    elif mode == "pull":
         pull_service.run_once()
 
 
@@ -58,21 +67,33 @@ def run_forever(settings: Settings, push_service: PushService, pull_service: Pul
     next_pull = 0.0
     while True:
         now = time.monotonic()
-        if now >= next_push:
-            _guarded("push", push_service.run_once)
-            next_push = now + settings.push_interval
+        pull_saw_remote_changes = False
         if now >= next_pull:
-            _guarded("pull", pull_service.run_once)
+            pull_stats = _guarded("pull", pull_service.run_once)
+            pull_saw_remote_changes = bool(pull_stats and _pull_saw_remote_changes(pull_stats))
             next_pull = now + settings.pull_interval
+        if now >= next_push:
+            if pull_saw_remote_changes:
+                defer_for = max(1, min(settings.push_interval, settings.pull_interval))
+                LOG.info("deferring push for %s seconds because pull saw CalDAV changes", defer_for)
+                next_push = now + defer_for
+            else:
+                _guarded("push", push_service.run_once)
+                next_push = now + settings.push_interval
         sleep_for = max(1.0, min(next_push, next_pull) - time.monotonic())
         time.sleep(sleep_for)
 
 
-def _guarded(name: str, fn: Callable[[], object]) -> None:
+def _guarded(name: str, fn: Callable[[], T]) -> T | None:
     try:
-        fn()
+        return fn()
     except Exception:
         LOG.exception("%s sync failed", name)
+        return None
+
+
+def _pull_saw_remote_changes(stats: object) -> bool:
+    return any(int(getattr(stats, name, 0)) > 0 for name in ("changed", "written", "deleted", "skipped_unmatched"))
 
 
 def parse_args() -> argparse.Namespace:

@@ -186,6 +186,21 @@ UID 是稳定标识符，基于笔记路径。重命名笔记 → UID 变化 →
 - 手机端对 `STATUS`、`DUE`、`PRIORITY` 的明确修改通过 FNS 写回 Obsidian
 - 如果两边同时改同一字段，先接受 CalDAV 侧变更；下一次 Vault → CalDAV reconciliation 会把 Obsidian 当前值重新推到 Radicale，形成最终收敛
 
+### 最终一致性保证
+
+当前服务通过以下机制保证 CalDAV 与 Obsidian note frontmatter 最终收敛：
+
+1. **pull 优先**：`--once both` 和常驻循环都先执行 CalDAV → Vault pull，再考虑 Vault → CalDAV push。这样手机端刚产生的 CalDAV 变更会先写回 FNS，不会被下一次 push 直接覆盖。
+2. **pull 有变更则推迟 push**：如果 pull 发现 CalDAV 有新增、修改、删除或无法匹配的对象，本轮跳过/推迟 push，给 FNS 写回和状态持久化留出一个 reconciliation 周期。
+3. **条件写 CalDAV**：push 更新已知对象时携带上次保存的 ETag (`If-Match`)；如果手机端已修改同一对象导致 ETag 变化，Radicale 返回 412 时本服务跳过该对象，等待下一轮 pull 先收敛。
+4. **持久化状态**：`SYNC_STATE_PATH` 保存每个 collection 的 sync-token、对象 ETag 和 UID/path 映射。只要该文件持久化，服务重启后仍能继续做增量同步和条件写。
+5. **FNS-only 写回**：CalDAV → Vault 只调用 FNS frontmatter API。FNS 不可用时写回失败并重试，不直接改本地 vault 文件，避免绕过 FNS 造成多设备状态分叉。
+
+已知边界：
+
+- 如果手动只运行 `--once push`，服务会按 Obsidian 当前值推送；部署自动化应优先使用 `--once both` 或常驻模式。
+- 如果 `SYNC_STATE_PATH` 丢失，服务需要通过一次全量同步重建 sync-token/ETag 状态；这期间无法识别“已知对象被手机端改过”的条件写冲突。
+
 ### FNS API 写回
 
 FNS 暴露 REST API（地址配置在 Obsidian 插件设置中）。本项目只通过 FNS API 写回 Obsidian，不做文件系统写入兜底。
