@@ -14,6 +14,7 @@ from models import is_task_note, normalize_path
 
 LOG = logging.getLogger(__name__)
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
+DEFAULT_CLIENT_TYPE = "caldav-bridge"
 DEFAULT_CLIENT_NAME = "caldav-bridge"
 
 
@@ -29,43 +30,6 @@ class Note:
     content_hash: str | None = None
     mtime: int | None = None
     raw: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class SyncLogEntry:
-    path: str
-    action: str | None = None
-    client_name: str | None = None
-    client_type: str | None = None
-    created_at: str | None = None
-    path_hash: str | None = None
-    resource_type: str | None = None
-    status: int | None = None
-
-    @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "SyncLogEntry":
-        return cls(
-            path=normalize_path(str(data.get("path") or "")),
-            action=_optional_str(data.get("action")),
-            client_name=_optional_str(data.get("clientName")),
-            client_type=_optional_str(data.get("clientType")),
-            created_at=_optional_str(data.get("createdAt")),
-            path_hash=_optional_str(data.get("pathHash")),
-            resource_type=_optional_str(data.get("type")),
-            status=_optional_int(data.get("status")),
-        )
-
-    def fingerprint(self) -> str:
-        return "|".join(
-            [
-                self.created_at or "",
-                self.path,
-                self.path_hash or "",
-                self.action or "",
-                self.client_name or "",
-                self.client_type or "",
-            ]
-        )
 
 
 def parse_frontmatter(content: str) -> dict[str, Any]:
@@ -88,7 +52,10 @@ class FnsClient:
         session: requests.Session | None = None,
         timeout: float = 30,
         task_path_keyword: str = "Tasks",
+        client_type: str = DEFAULT_CLIENT_TYPE,
         client_name: str = DEFAULT_CLIENT_NAME,
+        client_version: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         base_url = api_url.rstrip("/")
         if not base_url.endswith("/api"):
@@ -99,7 +66,10 @@ class FnsClient:
         self.session = session or requests.Session()
         self.timeout = timeout
         self.task_path_keyword = task_path_keyword
+        self.client_type = client_type
         self.client_name = client_name
+        self.client_version = client_version
+        self.user_agent = user_agent
 
     def list_notes(
         self,
@@ -149,50 +119,6 @@ class FnsClient:
                 break
             page += 1
 
-    def list_sync_logs(
-        self,
-        *,
-        resource_type: str = "note",
-        action: str | None = None,
-        page: int = 1,
-        page_size: int = 100,
-    ) -> tuple[list[SyncLogEntry], dict[str, Any]]:
-        params: dict[str, Any] = {
-            "vault": self.vault,
-            "type": resource_type,
-            "page": page,
-            "pageSize": page_size,
-        }
-        if action:
-            params["action"] = action
-        data = self._request("GET", "/sync-logs", params=params)
-        return [SyncLogEntry.from_api(item) for item in _extract_list(data)], _extract_pager(data)
-
-    def latest_note_log_cursor(self) -> dict[str, Any] | None:
-        entries, _pager = self.list_sync_logs(resource_type="note", page=1, page_size=100)
-        return sync_log_cursor_from_entries(entries)
-
-    def note_sync_logs_since(self, cursor: dict[str, Any] | None) -> tuple[list[SyncLogEntry], dict[str, Any] | None]:
-        page = 1
-        collected: list[SyncLogEntry] = []
-        newest_entries: list[SyncLogEntry] | None = None
-        stop = False
-        while not stop:
-            entries, pager = self.list_sync_logs(resource_type="note", page=page, page_size=100)
-            if newest_entries is None:
-                newest_entries = entries
-            for entry in entries:
-                if _sync_log_is_older_than_cursor(entry, cursor):
-                    stop = True
-                    break
-                if _sync_log_seen_in_cursor(entry, cursor):
-                    continue
-                collected.append(entry)
-            if stop or not _has_next_page(page, len(entries), pager):
-                break
-            page += 1
-        return list(reversed(collected)), sync_log_cursor_from_entries(newest_entries or []) or cursor
-
     def get_note(self, path: str) -> Note:
         data = self._request(
             "GET",
@@ -239,15 +165,33 @@ class FnsClient:
             return data
         return {"data": data}
 
-    def _request(self, method: str, endpoint: str, **kwargs: Any) -> Any:
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        token: str | None = None,
+        client_type: str | None = None,
+        client_name: str | None = None,
+        client_version: str | None = None,
+        user_agent: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        request_token = token or self.token
         headers = kwargs.pop("headers", {})
         headers = {
-            "Authorization": self.token,
-            "token": self.token,
-            "X-Client": self.client_name,
-            "X-Client-Name": self.client_name,
+            "Authorization": request_token,
+            "token": request_token,
+            "X-Client": client_type or self.client_type,
+            "X-Client-Name": client_name or self.client_name,
             **headers,
         }
+        version = client_version if client_version is not None else self.client_version
+        if version:
+            headers["X-Client-Version"] = version
+        request_user_agent = user_agent if user_agent is not None else self.user_agent
+        if request_user_agent:
+            headers["User-Agent"] = request_user_agent
         response = self.session.request(
             method,
             f"{self.api_url}{endpoint}",
@@ -294,41 +238,6 @@ def _extract_pager(data: Any) -> dict[str, Any]:
         if isinstance(nested, dict) and nested is not data:
             return _extract_pager(nested)
     return {}
-
-
-def sync_log_cursor_from_entries(entries: list[SyncLogEntry]) -> dict[str, Any] | None:
-    dated_entries = [entry for entry in entries if entry.created_at]
-    if not dated_entries:
-        return None
-    newest = max(dated_entries, key=lambda entry: _sync_log_sort_key(entry.created_at))
-    created_at = newest.created_at
-    return {
-        "created_at": created_at,
-        "fingerprints": sorted(entry.fingerprint() for entry in dated_entries if entry.created_at == created_at),
-    }
-
-
-def _sync_log_is_older_than_cursor(entry: SyncLogEntry, cursor: dict[str, Any] | None) -> bool:
-    if not cursor or not entry.created_at or not cursor.get("created_at"):
-        return False
-    return _sync_log_sort_key(entry.created_at) < _sync_log_sort_key(str(cursor["created_at"]))
-
-
-def _sync_log_seen_in_cursor(entry: SyncLogEntry, cursor: dict[str, Any] | None) -> bool:
-    if not cursor or not entry.created_at or entry.created_at != cursor.get("created_at"):
-        return False
-    fingerprints = cursor.get("fingerprints") or []
-    return entry.fingerprint() in set(str(fingerprint) for fingerprint in fingerprints)
-
-
-def _sync_log_sort_key(value: str | None) -> tuple[int, str]:
-    if not value:
-        return (0, "")
-    try:
-        normalized = value.replace("Z", "+00:00")
-        return (1, datetime.fromisoformat(normalized).isoformat())
-    except ValueError:
-        return (1, value)
 
 
 def _extract_note_data(data: Any) -> dict[str, Any]:

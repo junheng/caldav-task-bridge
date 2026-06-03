@@ -1,3 +1,4 @@
 icalendar>=5.0
 PyYAML>=6.0
 requests>=2.31
+websocket-client>=1.7

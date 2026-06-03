@@ -114,52 +114,5 @@ body
         self.assertEqual(first_call["params"]["searchMode"], "path")  # type: ignore[index]
         self.assertFalse(first_call["params"]["searchContent"])  # type: ignore[index]
 
-    def test_note_sync_logs_since_filters_by_cursor_and_returns_new_cursor(self) -> None:
-        session = SequenceSession(
-            [
-                {
-                    "list": [
-                        {
-                            "path": "Tasks/New.md",
-                            "clientName": "Obsidian",
-                            "createdAt": "2026-06-03T10:05:00Z",
-                            "action": "modify",
-                            "type": "note",
-                        },
-                        {
-                            "path": "Tasks/Seen.md",
-                            "clientName": "Obsidian",
-                            "createdAt": "2026-06-03T10:00:00Z",
-                            "action": "modify",
-                            "type": "note",
-                        },
-                        {
-                            "path": "Tasks/Old.md",
-                            "clientName": "Obsidian",
-                            "createdAt": "2026-06-03T09:59:00Z",
-                            "action": "modify",
-                            "type": "note",
-                        },
-                    ],
-                    "totalRows": 3,
-                    "pageSize": 100,
-                },
-            ]
-        )
-        client = FnsClient("https://fns.example.com", "token-1", "Core", session=session)  # type: ignore[arg-type]
-        seen_fingerprint = "2026-06-03T10:00:00Z|Tasks/Seen.md||modify|Obsidian|"
-
-        entries, cursor = client.note_sync_logs_since(
-            {"created_at": "2026-06-03T10:00:00Z", "fingerprints": [seen_fingerprint]}
-        )
-
-        self.assertEqual([entry.path for entry in entries], ["Tasks/New.md"])
-        self.assertEqual(cursor["created_at"], "2026-06-03T10:05:00Z")  # type: ignore[index]
-        first_call = session.calls[0]
-        self.assertEqual(first_call["url"], "https://fns.example.com/api/sync-logs")
-        self.assertEqual(first_call["params"]["type"], "note")  # type: ignore[index]
-        self.assertEqual(first_call["params"]["vault"], "Core")  # type: ignore[index]
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ from typing import TypeVar
 
 from caldav_client import CalDavClient
 from config import Settings
+from fns_ws import FnsWebSocketClient, derive_ws_url
 from pull import PullService
 from push import PushService
 from state import SyncState
@@ -25,16 +26,30 @@ def build_services(settings: Settings) -> tuple[PushService, PullService]:
         settings.fns_api_token,
         settings.fns_vault,
         task_path_keyword=settings.task_path_keyword,
+        client_type=settings.fns_client_type,
+        client_name=settings.fns_client_name,
+        client_version=settings.fns_client_version,
+        user_agent=settings.fns_user_agent,
     )
     caldav = CalDavClient(
         settings.radicale_url,
         settings.radicale_user,
         settings.radicale_password,
     )
+    fns_ws = FnsWebSocketClient(
+        settings.fns_ws_url or derive_ws_url(settings.fns_api_url),
+        settings.fns_api_token,
+        settings.fns_vault,
+        client_type=settings.fns_client_type,
+        client_name=settings.fns_client_name,
+        client_version=settings.fns_client_version,
+        user_agent=settings.fns_user_agent,
+    )
     push_service = PushService(
         fns,
         caldav,
         state,
+        fns_ws=fns_ws,
         tasks_collection=settings.tasks_collection,
         events_collection=settings.events_collection,
     )
@@ -108,8 +123,6 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     settings = Settings.from_env()
     push_service, pull_service = build_services(settings)
-    if settings.fns_ws_url:
-        LOG.info("FNS_WS_URL is configured but event streaming is not implemented in this MVP")
     if settings.radicale_rabbitmq_url:
         LOG.info("RADICALE_RABBITMQ_URL is configured but RabbitMQ hook consumption is not implemented in this MVP")
     if args.once:

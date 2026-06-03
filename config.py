@@ -45,6 +45,10 @@ class Settings:
     radicale_rabbitmq_url: str | None = None
     radicale_rabbitmq_topic: str | None = None
     task_path_keyword: str = "Tasks"
+    fns_client_type: str = "caldav-bridge"
+    fns_client_name: str = "caldav-bridge"
+    fns_client_version: str | None = None
+    fns_user_agent: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -64,4 +68,8 @@ class Settings:
             radicale_rabbitmq_url=_optional("RADICALE_RABBITMQ_URL"),
             radicale_rabbitmq_topic=_optional("RADICALE_RABBITMQ_TOPIC"),
             task_path_keyword=_optional("TASK_PATH_KEYWORD", "Tasks") or "Tasks",
+            fns_client_type=_optional("FNS_CLIENT_TYPE", "caldav-bridge") or "caldav-bridge",
+            fns_client_name=_optional("FNS_CLIENT_NAME", "caldav-bridge") or "caldav-bridge",
+            fns_client_version=_optional("FNS_CLIENT_VERSION"),
+            fns_user_agent=_optional("FNS_USER_AGENT"),
         )

@@ -78,14 +78,49 @@ class SyncState:
     def mark_initial_task_scan_completed(self) -> None:
         self.data.setdefault("fns", {})["initial_task_scan_completed"] = True
 
-    def get_fns_note_log_cursor(self) -> dict[str, Any] | None:
-        cursor = self.data.setdefault("fns", {}).get("note_log_cursor")
-        if isinstance(cursor, dict):
-            return cursor
-        return None
+    def get_fns_note_sync_last_time(self) -> int | None:
+        value = self.data.setdefault("fns", {}).get("note_sync_last_time")
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
-    def set_fns_note_log_cursor(self, cursor: dict[str, Any] | None) -> None:
-        self.data.setdefault("fns", {})["note_log_cursor"] = cursor
+    def set_fns_note_sync_last_time(self, last_time: int | None) -> None:
+        self.data.setdefault("fns", {})["note_sync_last_time"] = last_time
+
+    def get_fns_pending_note_changes(self) -> list[dict[str, str]]:
+        raw = self.data.setdefault("fns", {}).get("pending_note_changes")
+        if not isinstance(raw, list):
+            return []
+        changes: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            action = item.get("action") or "modify"
+            if path:
+                changes.append({"path": str(path), "action": str(action)})
+        return changes
+
+    def add_fns_pending_note_change(self, path: str, action: str = "modify") -> None:
+        change = {"path": path, "action": action}
+        changes = self.get_fns_pending_note_changes()
+        if change not in changes:
+            changes.append(change)
+        self.data.setdefault("fns", {})["pending_note_changes"] = changes
+
+    def remove_fns_pending_note_change(self, path: str, action: str | None = None) -> None:
+        changes = [
+            change
+            for change in self.get_fns_pending_note_changes()
+            if change["path"] != path or (action is not None and change["action"] != action)
+        ]
+        self.data.setdefault("fns", {})["pending_note_changes"] = changes
+
+    def forget_uid(self, uid: str) -> None:
+        self.data["uid_paths"].pop(uid, None)
 
     def _collection(self, collection: str) -> dict[str, Any]:
         collections = self.data.setdefault("collections", {})
