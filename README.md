@@ -260,8 +260,8 @@ Body:
 | `FNS_WS_URL` | 可选，FNS WebSocket 地址；不配置时由 `FNS_API_URL` 推导为 `/api/user/sync` | `wss://fns.example.com/api/user/sync` |
 | `FNS_CLIENT_TYPE` | 可选，FNS `X-Client` 值；token scope 需允许该 client | `caldav-bridge` |
 | `FNS_CLIENT_NAME` | 可选，FNS `X-Client-Name` 值 | `caldav-bridge` |
-| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.4` |
-| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.4` |
+| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.5` |
+| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.5` |
 | `TASK_PATH_KEYWORD` | 可选，初始化扫描时用于 FNS path 搜索的关键词 | `Tasks` |
 | `SYNC_STATE_PATH` | 可选，本服务同步状态文件路径 | `./data/state.json` |
 | `PUSH_INTERVAL` | 可选，Vault → CalDAV reconciliation 间隔（秒） | `900` |
@@ -339,7 +339,7 @@ docker run --rm --env-file .env caldav-task-bridge:local python scripts/smoke_te
 推荐发布时同时推送语义版本、短 SHA 和 `latest`：
 
 ```bash
-VERSION=0.1.4
+VERSION=0.1.5
 SHA=$(git rev-parse --short HEAD)
 
 docker build --network=host \

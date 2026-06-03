@@ -9,6 +9,28 @@ from models import Task, component_obsidian_path, task_to_vevent_ics, task_to_vt
 
 
 class ModelMappingTests(unittest.TestCase):
+    def test_task_from_frontmatter_accepts_single_value_lists_from_fns(self) -> None:
+        task = Task.from_frontmatter(
+            "Tasks/ListValues.md",
+            {
+                "task_status": ["进行中"],
+                "priority": ["1"],
+                "due_date": ["2026-04-04"],
+                "scheduled_date": ["2026-04-01"],
+                "assignee": ["[[Alice]]"],
+                "related_project": ["[[Project]]"],
+                "deleted": ["false"],
+            },
+        )
+
+        self.assertEqual(task.status, "进行中")
+        self.assertEqual(task.priority, 1)
+        self.assertEqual(task.due_date, date(2026, 4, 4))
+        self.assertEqual(task.scheduled_date, date(2026, 4, 1))
+        self.assertEqual(task.assignee, "[[Alice]]")
+        self.assertEqual(task.related_project, "[[Project]]")
+        self.assertFalse(task.deleted)
+
     def test_task_to_vtodo_maps_frontmatter_fields(self) -> None:
         task = Task(
             path="Tasks/Example.md",

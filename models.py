@@ -48,6 +48,7 @@ def title_from_path(path: str) -> str:
 
 
 def parse_date(value: Any) -> date | None:
+    value = _first_scalar(value)
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
@@ -63,6 +64,7 @@ def parse_date(value: Any) -> date | None:
 
 
 def coerce_bool(value: Any) -> bool:
+    value = _first_scalar(value)
     if isinstance(value, bool):
         return value
     if value is None:
@@ -83,6 +85,7 @@ def coerce_tags(value: Any) -> list[str]:
 
 
 def normalize_priority(value: Any) -> int:
+    value = _first_scalar(value)
     try:
         priority = int(value)
     except (TypeError, ValueError):
@@ -122,7 +125,7 @@ class Task:
     @classmethod
     def from_frontmatter(cls, path: str, frontmatter: dict[str, Any]) -> "Task":
         normalized = normalize_path(path)
-        status = str(frontmatter.get("task_status") or "待办")
+        status = _optional_str(frontmatter.get("task_status")) or "待办"
         return cls(
             path=normalized,
             title=title_from_path(normalized),
@@ -150,14 +153,24 @@ class Task:
 
 
 def _optional_str(value: Any) -> str | None:
+    value = _first_scalar(value)
     if value in (None, ""):
         return None
     return str(value)
 
 
+def _first_scalar(value: Any) -> Any:
+    if isinstance(value, list | tuple | set):
+        for item in value:
+            if item not in (None, ""):
+                return item
+        return None
+    return value
+
+
 def is_task_note(path: str, content: str, frontmatter: dict[str, Any]) -> bool:
     tags = set(coerce_tags(frontmatter.get("tags")))
-    note_type = str(frontmatter.get("type") or "").strip().lower()
+    note_type = (_optional_str(frontmatter.get("type")) or "").strip().lower()
     normalized = normalize_path(path)
     return (
         "task_status" in frontmatter

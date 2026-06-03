@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 from caldav_client import CalDavClient  # noqa: E402
 from config import Settings  # noqa: E402
 from fns_ws import FnsWebSocketClient, derive_ws_url  # noqa: E402
+from models import Task  # noqa: E402
 from vault import FnsClient  # noqa: E402
 
 
@@ -107,11 +108,12 @@ def smoke_caldav_collection(caldav: CalDavClient, collection: str, label: str) -
 
 
 def smoke_task_discovery(fns: FnsClient) -> None:
-    tasks = list(fns.iter_task_notes())
-    if not tasks:
+    notes = list(fns.iter_task_notes())
+    if not notes:
         raise RuntimeError("task discovery found no task notes")
-    status_counts = Counter(task.frontmatter.get("task_status", "unknown") for task in tasks)
-    print(f"smoke: task discovery found {len(tasks)} task note(s)")
+    tasks = [Task.from_frontmatter(note.path, note.frontmatter) for note in notes]
+    status_counts = Counter(task.status for task in tasks)
+    print(f"smoke: task discovery found {len(notes)} task note(s)")
     print(f"smoke: task statuses: {_format_counter(status_counts)}")
 
 
