@@ -24,7 +24,7 @@ def build_services(settings: Settings) -> tuple[PushService, PullService]:
         settings.fns_api_url,
         settings.fns_api_token,
         settings.fns_vault,
-        task_search_keyword=settings.task_search_keyword,
+        task_path_keyword=settings.task_path_keyword,
     )
     caldav = CalDavClient(
         settings.radicale_url,

@@ -25,6 +25,16 @@ class FakeSession:
         return FakeResponse()
 
 
+class SequenceSession:
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self.responses = responses
+        self.calls: list[dict[str, object]] = []
+
+    def request(self, method: str, url: str, **kwargs: object) -> FakeResponse:
+        self.calls.append({"method": method, "url": url, **kwargs})
+        return FakeResponse(payload={"status": True, "code": 1, "data": self.responses.pop(0)})
+
+
 class VaultTests(unittest.TestCase):
     def test_parse_frontmatter(self) -> None:
         content = """---
@@ -64,6 +74,43 @@ body
         client.list_notes()
 
         self.assertEqual(session.calls[0]["headers"]["X-Client"], "caldav-bridge")  # type: ignore[index]
+
+    def test_iter_task_notes_uses_path_search_then_filters_note_content(self) -> None:
+        session = SequenceSession(
+            [
+                {
+                    "list": [
+                        {"path": "Tasks/A.md"},
+                        {"path": "Tasks/B.md"},
+                        {"path": "Inbox/NotTask.md"},
+                    ],
+                    "totalRows": 3,
+                    "pageSize": 100,
+                },
+                {
+                    "path": "Tasks/A.md",
+                    "content": "---\ntask_status: 待办\n---\n",
+                },
+                {
+                    "path": "Tasks/B.md",
+                    "content": "---\ntask_status: 进行中\n---\n",
+                },
+                {
+                    "path": "Inbox/NotTask.md",
+                    "content": "---\ntitle: Notes\n---\nplain note",
+                },
+            ]
+        )
+        client = FnsClient("https://fns.example.com", "token-1", "Core", session=session)  # type: ignore[arg-type]
+
+        notes = list(client.iter_task_notes())
+
+        self.assertEqual([note.path for note in notes], ["Tasks/A.md", "Tasks/B.md"])
+        first_call = session.calls[0]
+        self.assertEqual(first_call["url"], "https://fns.example.com/api/notes")
+        self.assertEqual(first_call["params"]["keyword"], "Tasks")  # type: ignore[index]
+        self.assertEqual(first_call["params"]["searchMode"], "path")  # type: ignore[index]
+        self.assertFalse(first_call["params"]["searchContent"])  # type: ignore[index]
 
 
 if __name__ == "__main__":

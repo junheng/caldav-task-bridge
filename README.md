@@ -270,7 +270,7 @@ Body:
 - FNS 服务已可通过 HTTP 访问，Token 具备读笔记和修改 frontmatter 的权限。
 - 所有 FNS REST 请求都会携带 `X-Client: caldav-bridge`，便于 FNS 侧识别来源。
 - FNS vault 名称与 Obsidian/FNS 中的 vault 名称一致，例如 `Core`。
-- 任务笔记能被 FNS REST 搜索到。当前默认用 `TASK_SEARCH_KEYWORD=type/task` 搜索，然后再解析 frontmatter 判断是否为任务。
+- 任务笔记集中在 `Tasks/` 路径下，或可通过 `TASK_PATH_KEYWORD` 的 path 搜索命中。当前不依赖 FNS content/FTS 搜索；启动扫描会先用 path 搜索缩小候选路径，再逐条读取详情并用 `is_task_note()` 过滤。
 - 运行环境能持久化 `SYNC_STATE_PATH`，否则每次重启都会丢失 sync-token、ETag 和 UID/path 映射。
 
 ### 环境文件
@@ -289,7 +289,7 @@ FNS_VAULT=Core
 SYNC_STATE_PATH=/app/data/state.json
 PUSH_INTERVAL=900
 PULL_INTERVAL=300
-TASK_SEARCH_KEYWORD=type/task
+TASK_PATH_KEYWORD=Tasks
 ```
 
 不要把包含真实密码或 token 的 `.env` 提交进仓库。

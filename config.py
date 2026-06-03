@@ -44,7 +44,7 @@ class Settings:
     fns_ws_url: str | None = None
     radicale_rabbitmq_url: str | None = None
     radicale_rabbitmq_topic: str | None = None
-    task_search_keyword: str = "type/task"
+    task_path_keyword: str = "Tasks"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -63,5 +63,5 @@ class Settings:
             fns_ws_url=_optional("FNS_WS_URL"),
             radicale_rabbitmq_url=_optional("RADICALE_RABBITMQ_URL"),
             radicale_rabbitmq_topic=_optional("RADICALE_RABBITMQ_TOPIC"),
-            task_search_keyword=_optional("TASK_SEARCH_KEYWORD", "type/task") or "type/task",
+            task_path_keyword=_optional("TASK_PATH_KEYWORD", "Tasks") or "Tasks",
         )

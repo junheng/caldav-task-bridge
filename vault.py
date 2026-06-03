@@ -50,7 +50,7 @@ class FnsClient:
         *,
         session: requests.Session | None = None,
         timeout: float = 30,
-        task_search_keyword: str = "type/task",
+        task_path_keyword: str = "Tasks",
         client_name: str = DEFAULT_CLIENT_NAME,
     ) -> None:
         base_url = api_url.rstrip("/")
@@ -61,7 +61,7 @@ class FnsClient:
         self.vault = vault
         self.session = session or requests.Session()
         self.timeout = timeout
-        self.task_search_keyword = task_search_keyword
+        self.task_path_keyword = task_path_keyword
         self.client_name = client_name
 
     def list_notes(
@@ -88,12 +88,19 @@ class FnsClient:
         data = self._request("GET", "/notes", params=params)
         return _extract_list(data), _extract_pager(data)
 
-    def iter_note_paths(self, *, keyword: str | None = None, search_content: bool = False) -> Iterator[str]:
+    def iter_note_paths(
+        self,
+        *,
+        keyword: str | None = None,
+        search_content: bool = False,
+        search_mode: str = "content",
+    ) -> Iterator[str]:
         page = 1
         while True:
             items, pager = self.list_notes(
                 keyword=keyword,
                 search_content=search_content,
+                search_mode=search_mode,
                 page=page,
                 page_size=100,
             )
@@ -125,11 +132,7 @@ class FnsClient:
 
     def iter_task_notes(self) -> Iterator[Note]:
         seen: set[str] = set()
-        paths = list(self.iter_note_paths(keyword=self.task_search_keyword, search_content=True))
-        if not paths:
-            LOG.warning("FNS task keyword search returned no paths; falling back to note list scan")
-            paths = list(self.iter_note_paths())
-        for path in paths:
+        for path in self.iter_note_paths(keyword=self.task_path_keyword, search_content=False, search_mode="path"):
             if path in seen:
                 continue
             seen.add(path)
@@ -200,6 +203,8 @@ def _extract_list(data: Any) -> list[dict[str, Any]]:
 
 def _extract_pager(data: Any) -> dict[str, Any]:
     if isinstance(data, dict):
+        if any(key in data for key in ("totalRows", "total", "pageSize", "page_size", "page", "pageNo")):
+            return data
         pager = data.get("pager")
         if isinstance(pager, dict):
             return pager
@@ -228,8 +233,8 @@ def _extract_note_data(data: Any) -> dict[str, Any]:
 def _has_next_page(page: int, item_count: int, pager: dict[str, Any]) -> bool:
     if item_count == 0:
         return False
-    total = _optional_int(pager.get("totalRows"))
-    page_size = _optional_int(pager.get("pageSize")) or item_count
+    total = _optional_int(pager.get("totalRows")) or _optional_int(pager.get("total"))
+    page_size = _optional_int(pager.get("pageSize")) or _optional_int(pager.get("page_size")) or item_count
     if total is None:
         return item_count >= page_size
     return page * page_size < total
