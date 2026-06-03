@@ -13,6 +13,7 @@ class SyncState:
         self.data = data or {
             "last_push_timestamp": None,
             "collections": {},
+            "fns": {},
             "uid_paths": {},
         }
 
@@ -25,6 +26,7 @@ class SyncState:
             data = json.load(handle)
         data.setdefault("last_push_timestamp", None)
         data.setdefault("collections", {})
+        data.setdefault("fns", {})
         data.setdefault("uid_paths", {})
         return cls(path, data)
 
@@ -69,6 +71,21 @@ class SyncState:
 
     def mark_push_now(self) -> None:
         self.data["last_push_timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    def initial_task_scan_completed(self) -> bool:
+        return bool(self.data.setdefault("fns", {}).get("initial_task_scan_completed"))
+
+    def mark_initial_task_scan_completed(self) -> None:
+        self.data.setdefault("fns", {})["initial_task_scan_completed"] = True
+
+    def get_fns_note_log_cursor(self) -> dict[str, Any] | None:
+        cursor = self.data.setdefault("fns", {}).get("note_log_cursor")
+        if isinstance(cursor, dict):
+            return cursor
+        return None
+
+    def set_fns_note_log_cursor(self, cursor: dict[str, Any] | None) -> None:
+        self.data.setdefault("fns", {})["note_log_cursor"] = cursor
 
     def _collection(self, collection: str) -> dict[str, Any]:
         collections = self.data.setdefault("collections", {})

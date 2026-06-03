@@ -91,14 +91,15 @@ related_project: "[[项目名]]"
 - Radicale v3 文档显示其文件存储会维护 sync-token 缓存；同时 `[hook]` 支持 `rabbitmq`，可用于事件变更和删除通知。
 - Python `caldav` 库已支持按 `sync_token` 拉取 collection 对象；如果服务端不支持或 token 失效，再做一次全量获取。
 - FNS 服务公开资料显示同时提供 REST API 和 WebSocket 实时同步；REST API 已有 `PATCH /api/note/frontmatter`，适合作为本项目写回 Obsidian 的首选接口。
+- FNS REST API 提供 `/api/sync-logs`，可按 `type=note` 和 `vault` 拉取笔记更新日志。初始化后，Vault → CalDAV 可用该日志做增量候选路径发现。
 
 ### 当前决策
 
 1. **不直接写 vault 文件系统**。CalDAV → Vault 的写回只走 FNS API；FNS 写失败时记录错误并等待下次同步重试。
 2. **CalDAV 拉取使用 sync-token 增量同步**。`PULL_INTERVAL` 只作为未配置事件触发时的 reconciliation 间隔，不再做每次全量轮询。
 3. **Radicale 事件触发作为后续增强**。如果后续接入 RabbitMQ hook，本服务消费通知后立即执行一次 sync-token delta pull；通知本身只作为触发信号，真实差异仍以 CalDAV REPORT 结果为准。
-4. **Vault 推送当前使用 FNS REST reconciliation**。后续接入 FNS WebSocket note 变更事件后，只重新解析受影响任务；当前按 `PUSH_INTERVAL` 低频扫描。
-5. **必须持久化同步状态**：包括 `last_push_timestamp`、每个 CalDAV collection 的 `sync_token`、UID ↔ vault 相对路径映射、已知 ETag。状态文件默认放在本服务自己的 data 目录，不写入 vault。
+4. **Vault 推送使用 FNS REST 增量候选发现**。首次运行用 `TASK_PATH_KEYWORD` 做 path 搜索并读取候选任务；后续运行读取 FNS `/api/sync-logs`，只重新解析变更过的 note path。后续接入 FNS WebSocket 后，可把 WebSocket 作为更实时的触发源。
+5. **必须持久化同步状态**：包括 `last_push_timestamp`、FNS note sync-log cursor、每个 CalDAV collection 的 `sync_token`、UID ↔ vault 相对路径映射、已知 ETag。状态文件默认放在本服务自己的 data 目录，不写入 vault。
 
 ## 推送同步（Vault → CalDAV）：`push.py`
 
@@ -111,9 +112,9 @@ related_project: "[[项目名]]"
 
 ```
 1. 取得需要同步的任务笔记
-   - 启动时：通过 FNS REST 搜索/读取 type/task 笔记，建立 UID ↔ path 状态
-   - 当前运行时：按 PUSH_INTERVAL 低频重新扫描，修复漏事件或状态丢失
-   - 后续增强：消费 FNS WebSocket note 变更事件，只处理受影响路径
+   - 首次运行：记录当前 FNS note sync-log cursor；通过 FNS REST `searchMode=path` + `TASK_PATH_KEYWORD` 搜索候选路径，再逐条读取详情并用 `is_task_note()` 过滤
+   - 后续运行：读取 `/api/sync-logs?type=note&vault=...`，只处理 cursor 之后的新 note path
+   - 回环抑制：跳过 `clientName` 或 `clientType` 等于 `caldav-bridge` 的 sync log；这些日志来自本服务通过 FNS 写回的变更，不再触发 Vault → CalDAV push
 
 2. 过滤：task_status != "已完成" 且 deleted != true
 
@@ -193,13 +194,14 @@ UID 是稳定标识符，基于笔记路径。重命名笔记 → UID 变化 →
 1. **pull 优先**：`--once both` 和常驻循环都先执行 CalDAV → Vault pull，再考虑 Vault → CalDAV push。这样手机端刚产生的 CalDAV 变更会先写回 FNS，不会被下一次 push 直接覆盖。
 2. **pull 有变更则推迟 push**：如果 pull 发现 CalDAV 有新增、修改、删除或无法匹配的对象，本轮跳过/推迟 push，给 FNS 写回和状态持久化留出一个 reconciliation 周期。
 3. **条件写 CalDAV**：push 更新已知对象时携带上次保存的 ETag (`If-Match`)；如果手机端已修改同一对象导致 ETag 变化，Radicale 返回 412 时本服务跳过该对象，等待下一轮 pull 先收敛。
-4. **持久化状态**：`SYNC_STATE_PATH` 保存每个 collection 的 sync-token、对象 ETag 和 UID/path 映射。只要该文件持久化，服务重启后仍能继续做增量同步和条件写。
-5. **FNS-only 写回**：CalDAV → Vault 只调用 FNS frontmatter API。FNS 不可用时写回失败并重试，不直接改本地 vault 文件，避免绕过 FNS 造成多设备状态分叉。
+4. **FNS 回环抑制**：所有 FNS 写回都带 `X-Client-Name: caldav-bridge`；后续 push 读取 sync logs 时跳过该客户端产生的日志，避免本服务写回 Obsidian 后又把同一变更推回 CalDAV。
+5. **持久化状态**：`SYNC_STATE_PATH` 保存 FNS note sync-log cursor、每个 CalDAV collection 的 sync-token、对象 ETag 和 UID/path 映射。只要该文件持久化，服务重启后仍能继续做增量同步和条件写。
+6. **FNS-only 写回**：CalDAV → Vault 只调用 FNS frontmatter API。FNS 不可用时写回失败并重试，不直接改本地 vault 文件，避免绕过 FNS 造成多设备状态分叉。
 
 已知边界：
 
 - 如果手动只运行 `--once push`，服务会按 Obsidian 当前值推送；部署自动化应优先使用 `--once both` 或常驻模式。
-- 如果 `SYNC_STATE_PATH` 丢失，服务需要通过一次全量同步重建 sync-token/ETag 状态；这期间无法识别“已知对象被手机端改过”的条件写冲突。
+- 如果 `SYNC_STATE_PATH` 丢失，服务需要通过一次初始化扫描重建 FNS sync-log cursor、CalDAV sync-token 和 ETag 状态；这期间无法识别“已知对象被手机端改过”的条件写冲突。
 
 ### FNS API 写回
 
@@ -268,10 +270,10 @@ Body:
 
 - Radicale 已可通过 CalDAV/WebDAV URL 访问，且账号对 `/diomgis/tasks/` 和 `/diomgis/core-vault/` 有读写权限。
 - FNS 服务已可通过 HTTP 访问，Token 具备读笔记和修改 frontmatter 的权限。
-- 所有 FNS REST 请求都会携带 `X-Client: caldav-bridge`，便于 FNS 侧识别来源。
+- 所有 FNS REST 请求都会携带 `X-Client: caldav-bridge` 和 `X-Client-Name: caldav-bridge`；FNS sync log 中的 `clientName` 应来自 `X-Client-Name`。
 - FNS vault 名称与 Obsidian/FNS 中的 vault 名称一致，例如 `Core`。
 - 任务笔记集中在 `Tasks/` 路径下，或可通过 `TASK_PATH_KEYWORD` 的 path 搜索命中。当前不依赖 FNS content/FTS 搜索；启动扫描会先用 path 搜索缩小候选路径，再逐条读取详情并用 `is_task_note()` 过滤。
-- 运行环境能持久化 `SYNC_STATE_PATH`，否则每次重启都会丢失 sync-token、ETag 和 UID/path 映射。
+- 运行环境能持久化 `SYNC_STATE_PATH`，否则每次重启都会丢失 FNS sync-log cursor、CalDAV sync-token、ETag 和 UID/path 映射。
 
 ### 环境文件
 
@@ -344,7 +346,7 @@ docker run --rm --env-file .env -v "$PWD/data:/app/data" caldav-task-bridge:loca
 
 - `push` 后 Radicale `/diomgis/tasks/` 出现 VTODO；有 `due_date` 的任务在 `/diomgis/core-vault/` 出现 VEVENT。
 - `pull` 后，手机端完成/改期产生的 CalDAV 变化通过 FNS 更新 Obsidian frontmatter。
-- `data/state.json` 被创建，并包含 collection sync-token、ETag 和 UID/path 映射。
+- `data/state.json` 被创建，并包含 FNS sync-log cursor、collection sync-token、ETag 和 UID/path 映射。
 
 ### 常驻运行
 
@@ -388,7 +390,7 @@ docker rm caldav-task-bridge
 - FNS 写回失败：确认 `FNS_API_TOKEN` 有 note/frontmatter 写权限；本服务不会改本地 vault 文件。
 - Radicale `401/403`：确认 CalDAV 用户、密码和 collection 权限。
 - `sync-token` 失效：服务会自动做一次全量 PROPFIND 重建状态。
-- 重启后重复同步：确认 `SYNC_STATE_PATH` 所在目录已挂载持久化卷。
+- 重启后重复同步：确认 `SYNC_STATE_PATH` 所在目录已挂载持久化卷；否则服务会重新做首次 path 搜索并重建 FNS/CalDAV 游标。
 
 ## 目录结构
 
@@ -402,7 +404,7 @@ caldav-task-bridge/
 ├── vault.py            # Vault 读写工具（FNS REST）
 ├── caldav_client.py    # Radicale 交互封装
 ├── models.py           # 数据模型（Task, VtodoMapping, VeventMapping）
-├── state.py            # sync-token、UID/path、ETag、last_push_timestamp 状态
+├── state.py            # FNS sync-log cursor、CalDAV sync-token、UID/path、ETag 状态
 └── requirements.txt
 ```
 
