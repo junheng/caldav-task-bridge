@@ -5,7 +5,15 @@ from datetime import date
 
 from icalendar import Calendar
 
-from models import Task, component_obsidian_path, task_to_vevent_ics, task_to_vtodo_ics, updates_from_caldav_component
+from models import (
+    Task,
+    component_obsidian_path,
+    note_body_excerpt,
+    path_from_description,
+    task_to_vevent_ics,
+    task_to_vtodo_ics,
+    updates_from_caldav_component,
+)
 
 
 class ModelMappingTests(unittest.TestCase):
@@ -44,7 +52,7 @@ class ModelMappingTests(unittest.TestCase):
             tags=["type/task", "work"],
         )
 
-        calendar = Calendar.from_ical(task_to_vtodo_ics(task, "Core"))
+        calendar = Calendar.from_ical(task_to_vtodo_ics(task, "Core", note_content="---\ntitle: x\n---\n\nBody line"))
         todo = next(component for component in calendar.walk() if component.name == "VTODO")
 
         self.assertEqual(str(todo["STATUS"]), "IN-PROCESS")
@@ -53,8 +61,10 @@ class ModelMappingTests(unittest.TestCase):
         self.assertEqual(todo["DTSTART"].dt, date(2026, 6, 5))
         self.assertEqual(str(todo["X-OBSIDIAN-PATH"]), "Tasks/Example.md")
         self.assertEqual(str(todo["URL"]), "obsidian://open?vault=Core&file=Tasks/Example.md")
+        self.assertEqual(str(todo["ATTACH"]), "obsidian://open?vault=Core&file=Tasks/Example.md")
+        self.assertIn("Body line", str(todo["DESCRIPTION"]))
 
-    def test_overdue_vevent_is_shown_today(self) -> None:
+    def test_overdue_vevent_keeps_real_due_date(self) -> None:
         task = Task(
             path="Tasks/Late.md",
             title="Late",
@@ -62,13 +72,25 @@ class ModelMappingTests(unittest.TestCase):
             due_date=date(2026, 6, 1),
         )
 
+        calendar = Calendar.from_ical(task_to_vevent_ics(task, "Core", today=date(2026, 6, 3), note_content="Event body"))
+        event = next(component for component in calendar.walk() if component.name == "VEVENT")
+
+        self.assertEqual(event["DTSTART"].dt, date(2026, 6, 1))
+        self.assertEqual(event["DTEND"].dt, date(2026, 6, 2))
+        self.assertTrue(str(event["SUMMARY"]).startswith("\U0001f6a8"))
+        self.assertEqual(str(event["STATUS"]), "CONFIRMED")
+        self.assertEqual(str(event["URL"]), "obsidian://open?vault=Core&file=Tasks/Late.md")
+        self.assertEqual(str(event["ATTACH"]), "obsidian://open?vault=Core&file=Tasks/Late.md")
+        self.assertIn("Event body", str(event["DESCRIPTION"]))
+
+    def test_vevent_pull_uses_dtstart_as_due_date(self) -> None:
+        task = Task(path="Tasks/Moved.md", title="Moved", due_date=date(2026, 6, 10))
         calendar = Calendar.from_ical(task_to_vevent_ics(task, "Core", today=date(2026, 6, 3)))
         event = next(component for component in calendar.walk() if component.name == "VEVENT")
 
-        self.assertEqual(event["DTSTART"].dt, date(2026, 6, 3))
-        self.assertEqual(event["DTEND"].dt, date(2026, 6, 4))
-        self.assertEqual(str(event["STATUS"]), "CONFIRMED")
-        self.assertEqual(str(event["URL"]), "obsidian://open?vault=Core&file=Tasks/Late.md")
+        updates = updates_from_caldav_component(event, today=date(2026, 6, 3))
+
+        self.assertEqual(updates["due_date"], "2026-06-10")
 
     def test_completed_vtodo_maps_to_fns_frontmatter_updates(self) -> None:
         task = Task(path="Tasks/Done.md", title="Done", status="已完成")
@@ -88,6 +110,27 @@ class ModelMappingTests(unittest.TestCase):
         del todo["DESCRIPTION"]
 
         self.assertEqual(component_obsidian_path(todo), "Tasks/Linked.md")
+
+    def test_component_obsidian_path_can_fall_back_to_attach(self) -> None:
+        task = Task(path="Tasks/Attached.md", title="Attached")
+        calendar = Calendar.from_ical(task_to_vtodo_ics(task, "Core"))
+        todo = next(component for component in calendar.walk() if component.name == "VTODO")
+        del todo["X-OBSIDIAN-PATH"]
+        del todo["URL"]
+        del todo["DESCRIPTION"]
+
+        self.assertEqual(component_obsidian_path(todo), "Tasks/Attached.md")
+
+    def test_note_body_excerpt_strips_frontmatter_and_truncates(self) -> None:
+        content = "---\ntitle: hidden\n---\n\n" + ("x" * 20)
+
+        self.assertEqual(note_body_excerpt(content, limit=10), "xxxxxxxxxx\n...[truncated]")
+
+    def test_path_from_description_accepts_labeled_obsidian_link(self) -> None:
+        self.assertEqual(
+            path_from_description("Body\n\nObsidian: obsidian://open?vault=Core&file=Tasks/Linked.md"),
+            "Tasks/Linked.md",
+        )
 
 
 if __name__ == "__main__":

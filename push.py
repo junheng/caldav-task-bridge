@@ -12,7 +12,7 @@ from vault import FnsClient, FnsError, Note
 
 
 LOG = logging.getLogger(__name__)
-CALDAV_MAPPING_VERSION = 2
+CALDAV_MAPPING_VERSION = 4
 
 
 @dataclass
@@ -70,7 +70,7 @@ class PushService:
                 if self._delete_task_objects(task.path, stats):
                     self.state.remove_fns_pending_note_change(task.path, "modify")
                 continue
-            if self._push_task(task, stats):
+            if self._push_task(task, stats, note_content=note.content):
                 self.state.remove_fns_pending_note_change(note.path, "modify")
         self.state.mark_push_now()
         self.state.save()
@@ -164,10 +164,10 @@ class PushService:
         self.state.remove_etag(collection, href)
         return True
 
-    def _push_task(self, task: Task, stats: PushStats) -> bool:
+    def _push_task(self, task: Task, stats: PushStats, *, note_content: str = "") -> bool:
         self.state.remember_uid(task.task_uid, task.path)
         self.state.remember_uid(task.event_uid, task.path)
-        vtodo = task_to_vtodo_ics(task, self.fns.vault)
+        vtodo = task_to_vtodo_ics(task, self.fns.vault, note_content=note_content)
         todo_href = self.caldav.object_href(self.tasks_collection, task.task_uid)
         todo_if_match = self.state.get_etag(self.tasks_collection, todo_href)
         try:
@@ -181,7 +181,7 @@ class PushService:
         if task.is_completed:
             stats.completed += 1
 
-        vevent = task_to_vevent_ics(task, self.fns.vault)
+        vevent = task_to_vevent_ics(task, self.fns.vault, note_content=note_content)
         if vevent:
             event_href = self.caldav.object_href(self.events_collection, task.event_uid)
             event_if_match = self.state.get_etag(self.events_collection, event_href)

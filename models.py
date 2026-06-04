@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from hashlib import md5
@@ -7,7 +8,7 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from icalendar import Calendar, Event, Todo
+from icalendar import Calendar, Event, Todo, vUri
 
 
 STATUS_TO_CALDAV = {
@@ -25,6 +26,8 @@ CALDAV_TO_STATUS = {
 }
 
 PRIORITY_TO_CALDAV = {1: 1, 2: 5, 3: 9}
+DESCRIPTION_BODY_LIMIT = 4000
+FRONTMATTER_BLOCK_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 
 
 def normalize_path(path: str) -> str:
@@ -182,7 +185,13 @@ def is_task_note(path: str, content: str, frontmatter: dict[str, Any]) -> bool:
     )
 
 
-def task_to_vtodo_ics(task: Task, vault_name: str, now: datetime | None = None) -> str:
+def task_to_vtodo_ics(
+    task: Task,
+    vault_name: str,
+    now: datetime | None = None,
+    *,
+    note_content: str = "",
+) -> str:
     now = now or datetime.now(timezone.utc)
     link = obsidian_url(vault_name, task.path)
     calendar = _calendar()
@@ -191,8 +200,8 @@ def task_to_vtodo_ics(task: Task, vault_name: str, now: datetime | None = None) 
     todo.add("summary", task.title)
     todo.add("status", STATUS_TO_CALDAV.get(task.status, "NEEDS-ACTION"))
     todo.add("priority", PRIORITY_TO_CALDAV.get(task.priority, 5))
-    todo.add("description", build_description(task, vault_name))
-    todo.add("url", link)
+    todo.add("description", build_description(task, vault_name, note_content=note_content))
+    _add_link_properties(todo, link)
     todo.add("x-obsidian-path", task.path)
     if task.tags:
         todo.add("categories", task.tags)
@@ -206,36 +215,63 @@ def task_to_vtodo_ics(task: Task, vault_name: str, now: datetime | None = None) 
     return calendar.to_ical().decode("utf-8")
 
 
-def task_to_vevent_ics(task: Task, vault_name: str, today: date | None = None) -> str | None:
+def task_to_vevent_ics(
+    task: Task,
+    vault_name: str,
+    today: date | None = None,
+    *,
+    note_content: str = "",
+) -> str | None:
     if task.due_date is None:
         return None
     today = today or date.today()
     overdue = task.due_date < today and not task.is_completed
-    display_date = today if overdue else task.due_date
     link = obsidian_url(vault_name, task.path)
     calendar = _calendar()
     event = Event()
     event.add("uid", task.event_uid)
-    event.add("dtstart", display_date)
-    event.add("dtend", display_date + timedelta(days=1))
+    event.add("dtstart", task.due_date)
+    event.add("dtend", task.due_date + timedelta(days=1))
     prefix = "\U0001f6a8" if overdue else "\U0001f4cb"
     event.add("summary", f"{prefix} {task.title}")
-    event.add("description", link)
-    event.add("url", link)
+    event.add("description", build_description(task, vault_name, note_content=note_content))
+    _add_link_properties(event, link)
     event.add("status", "CANCELLED" if task.is_completed else "CONFIRMED")
     event.add("x-obsidian-path", task.path)
     calendar.add_component(event)
     return calendar.to_ical().decode("utf-8")
 
 
-def build_description(task: Task, vault_name: str) -> str:
+def build_description(task: Task, vault_name: str, *, note_content: str = "") -> str:
     parts: list[str] = []
     if task.assignee:
         parts.append(f"Assignee: {task.assignee}")
     if task.related_project:
         parts.append(f"Project: {task.related_project}")
-    parts.append(obsidian_url(vault_name, task.path))
+    body = note_body_excerpt(note_content)
+    if body:
+        if parts:
+            parts.append("")
+        parts.append(body)
+    if parts:
+        parts.append("")
+    parts.append(f"Obsidian: {obsidian_url(vault_name, task.path)}")
     return "\n".join(parts)
+
+
+def note_body_excerpt(content: str, limit: int = DESCRIPTION_BODY_LIMIT) -> str:
+    body = FRONTMATTER_BLOCK_RE.sub("", content or "", count=1).strip()
+    if not body:
+        return ""
+    body = re.sub(r"\n{4,}", "\n\n\n", body)
+    if len(body) <= limit:
+        return body
+    return f"{body[:limit].rstrip()}\n...[truncated]"
+
+
+def _add_link_properties(component: Any, link: str) -> None:
+    component.add("url", link)
+    component.add("attach", vUri(link), parameters={"VALUE": "URI"})
 
 
 def obsidian_url(vault_name: str, path: str) -> str:
@@ -263,6 +299,11 @@ def component_obsidian_path(component: Any) -> str | None:
         path = path_from_obsidian_url(str(url))
         if path:
             return path
+    attachments = component.get("ATTACH")
+    for attachment in _component_values(attachments):
+        path = path_from_obsidian_url(str(attachment))
+        if path:
+            return path
     description = component.get("DESCRIPTION")
     if description:
         return path_from_description(str(description))
@@ -276,7 +317,7 @@ def path_from_description(description: str) -> str | None:
     for line in description.splitlines():
         if marker not in line:
             continue
-        path = _path_from_parsed_obsidian_url(urlparse(line.strip()))
+        path = _path_from_parsed_obsidian_url(urlparse(line[line.index(marker) :].strip()))
         if path:
             return path
     return None
@@ -333,6 +374,14 @@ def _component_text(component: Any, field: str) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _component_values(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list | tuple):
+        return list(value)
+    return [value]
 
 
 def _component_date(component: Any, field: str) -> date | None:
