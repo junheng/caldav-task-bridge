@@ -12,7 +12,7 @@ from vault import FnsClient, FnsError, Note
 
 
 LOG = logging.getLogger(__name__)
-CALDAV_MAPPING_VERSION = 4
+CALDAV_MAPPING_VERSION = 5
 
 
 @dataclass

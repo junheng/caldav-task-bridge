@@ -28,6 +28,7 @@ CALDAV_TO_STATUS = {
 PRIORITY_TO_CALDAV = {1: 1, 2: 5, 3: 9}
 DESCRIPTION_BODY_LIMIT = 4000
 FRONTMATTER_BLOCK_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
+WIKILINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
 
 
 def normalize_path(path: str) -> str:
@@ -166,7 +167,7 @@ def _first_scalar(value: Any) -> Any:
     if isinstance(value, list | tuple | set):
         for item in value:
             if item not in (None, ""):
-                return item
+                return _first_scalar(item)
         return None
     return value
 
@@ -245,9 +246,9 @@ def task_to_vevent_ics(
 def build_description(task: Task, vault_name: str, *, note_content: str = "") -> str:
     parts: list[str] = []
     if task.assignee:
-        parts.append(f"Assignee: {task.assignee}")
+        parts.append(f"Assignee: {display_metadata_value(task.assignee)}")
     if task.related_project:
-        parts.append(f"Project: {task.related_project}")
+        parts.append(f"Project: {display_metadata_value(task.related_project)}")
     body = note_body_excerpt(note_content)
     if body:
         if parts:
@@ -267,6 +268,17 @@ def note_body_excerpt(content: str, limit: int = DESCRIPTION_BODY_LIMIT) -> str:
     if len(body) <= limit:
         return body
     return f"{body[:limit].rstrip()}\n...[truncated]"
+
+
+def display_metadata_value(value: str) -> str:
+    return WIKILINK_RE.sub(_wikilink_label, value).strip()
+
+
+def _wikilink_label(match: re.Match[str]) -> str:
+    target = match.group(1).strip()
+    if "|" in target:
+        return target.rsplit("|", 1)[1].strip()
+    return target.rsplit("/", 1)[-1].strip()
 
 
 def _add_link_properties(component: Any, link: str) -> None:

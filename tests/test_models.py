@@ -8,6 +8,7 @@ from icalendar import Calendar
 from models import (
     Task,
     component_obsidian_path,
+    display_metadata_value,
     note_body_excerpt,
     path_from_description,
     task_to_vevent_ics,
@@ -26,7 +27,7 @@ class ModelMappingTests(unittest.TestCase):
                 "due_date": ["2026-04-04"],
                 "scheduled_date": ["2026-04-01"],
                 "assignee": ["[[Alice]]"],
-                "related_project": ["[[Project]]"],
+                "related_project": [["[[Project]]"]],
                 "deleted": ["false"],
             },
         )
@@ -62,7 +63,14 @@ class ModelMappingTests(unittest.TestCase):
         self.assertEqual(str(todo["X-OBSIDIAN-PATH"]), "Tasks/Example.md")
         self.assertEqual(str(todo["URL"]), "obsidian://open?vault=Core&file=Tasks/Example.md")
         self.assertEqual(str(todo["ATTACH"]), "obsidian://open?vault=Core&file=Tasks/Example.md")
+        self.assertIn("Assignee: Alice", str(todo["DESCRIPTION"]))
+        self.assertIn("Project: Project", str(todo["DESCRIPTION"]))
+        self.assertNotIn("[[Alice]]", str(todo["DESCRIPTION"]))
         self.assertIn("Body line", str(todo["DESCRIPTION"]))
+
+    def test_display_metadata_value_unwraps_obsidian_wikilinks(self) -> None:
+        self.assertEqual(display_metadata_value("[[People/Alice|Alice A.]]"), "Alice A.")
+        self.assertEqual(display_metadata_value("[[Project]] / [[People/Bob]]"), "Project / Bob")
 
     def test_overdue_vevent_keeps_real_due_date(self) -> None:
         task = Task(

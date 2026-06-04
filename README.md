@@ -56,7 +56,7 @@ related_project: "[[项目名]]"
 | `due_date` | `DUE;VALUE=DATE:<date>` | 截止日期 |
 | `scheduled_date` | `DTSTART;VALUE=DATE:<date>` | 计划开始日期 |
 | `title` (文件名) | `SUMMARY` | 任务标题 |
-| `assignee` + `related_project` + 正文摘要 | `DESCRIPTION` | 摘要信息、去掉 frontmatter 后的笔记正文摘要、`obsidian://open` 链接 |
+| `assignee` + `related_project` + 正文摘要 | `DESCRIPTION` | 摘要信息、去掉 frontmatter 后的笔记正文摘要、`obsidian://open` 链接；Obsidian `[[...]]` wikilink 只保留展示名 |
 | 笔记链接 | `URL` | 可点击的 `obsidian://open` 链接 |
 | 笔记链接 | `ATTACH;VALUE=URI` | 兼容不展示 `URL` 的客户端 |
 | `tags` | `CATEGORIES` | 逗号分隔 |
@@ -80,7 +80,7 @@ related_project: "[[项目名]]"
 
 VEVENT 的 `DTSTART` 始终等于真实 `due_date`。逾期任务只在 `SUMMARY` 前加 `🚨`，不移动事件日期，避免 pull 把展示日期误写回 Obsidian。
 
-`DESCRIPTION` 按 iCalendar 标准写入文本并由库自动折行；标准没有给 VTODO/VEVENT 描述设定很小的字数上限，但客户端展示和同步性能会有实际限制，因此本项目只写入正文摘要，默认最多 4000 字符。
+`DESCRIPTION` 按 iCalendar 标准写入文本并由库自动折行；标准没有给 VTODO/VEVENT 描述设定很小的字数上限，但客户端展示和同步性能会有实际限制，因此本项目只写入正文摘要，默认最多 4000 字符。`assignee` 和 `related_project` 中的 Obsidian wikilink 会在 CalDAV 侧显示为普通文本，例如 `[[People/Alice|Alice]]` 显示为 `Alice`。
 
 ### CalDAV 存储结构
 
@@ -130,7 +130,7 @@ VEVENT 的 `DTSTART` 始终等于真实 `due_date`。逾期任务只在 `SUMMARY
    a. 计算 UID = md5(file_path)[:12]
    b. 构造 VTODO（icalendar Todo 对象）
       - 写入 UID、SUMMARY、STATUS、PRIORITY、DUE、DTSTART、DESCRIPTION、CATEGORIES
-      - DESCRIPTION 包含去掉 frontmatter 后的笔记正文摘要；当前摘要上限为 4000 字符，过长会截断
+      - DESCRIPTION 包含去掉 frontmatter 后的笔记正文摘要；当前摘要上限为 4000 字符，过长会截断；`assignee` / `related_project` 的 wikilink 只保留展示名
       - 写入 URL 和 ATTACH;VALUE=URI，提供任务客户端可直接点击的 Obsidian 链接
       - 写入 X-OBSIDIAN-PATH，确保 pull 能定位原始笔记
    c. 查询 Radicale 中同 UID 对象
@@ -265,8 +265,8 @@ Body:
 | `FNS_WS_URL` | 可选，FNS WebSocket 地址；不配置时由 `FNS_API_URL` 推导为 `/api/user/sync` | `wss://fns.example.com/api/user/sync` |
 | `FNS_CLIENT_TYPE` | 可选，FNS `X-Client` 值；token scope 需允许该 client | `caldav-bridge` |
 | `FNS_CLIENT_NAME` | 可选，FNS `X-Client-Name` 值 | `caldav-bridge` |
-| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.6` |
-| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.6` |
+| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.7` |
+| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.7` |
 | `TASK_PATH_KEYWORD` | 可选，初始化扫描时用于 FNS path 搜索的关键词 | `Tasks` |
 | `SYNC_STATE_PATH` | 可选，本服务同步状态文件路径 | `./data/state.json` |
 | `PUSH_INTERVAL` | 可选，Vault → CalDAV reconciliation 间隔（秒） | `900` |
@@ -344,7 +344,7 @@ docker run --rm --env-file .env caldav-task-bridge:local python scripts/smoke_te
 推荐发布时同时推送语义版本、短 SHA 和 `latest`：
 
 ```bash
-VERSION=0.1.6
+VERSION=0.1.7
 SHA=$(git rev-parse --short HEAD)
 
 docker build --network=host \
