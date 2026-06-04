@@ -231,8 +231,8 @@ Body:
   "vault": "Core",
   "path": "Tasks/example.md",
   "updates": {
-    "task_status": ["已完成"],
-    "done_date": ["2026-06-03"]
+    "task_status": "已完成",
+    "done_date": "2026-06-03"
   },
   "remove": []
 }
@@ -241,6 +241,7 @@ Body:
 说明：
 
 - `PATCH /api/note/frontmatter` 是当前调研到的最贴合接口，避免读取整篇笔记再重写。
+- 标量字段按标量写入，避免把 `due_date`、`priority`、`task_status` 等字段写成 YAML 数组；只有 `tags` 这类真正多值字段才写数组。
 - 如果该接口在目标 FNS 版本不可用，视为配置/版本错误；服务记录错误并停止该条写回，不直接修改 vault 文件。
 - FNS 变更会由 FNS 服务实时同步到其他 Obsidian 设备。
 
@@ -265,8 +266,8 @@ Body:
 | `FNS_WS_URL` | 可选，FNS WebSocket 地址；不配置时由 `FNS_API_URL` 推导为 `/api/user/sync` | `wss://fns.example.com/api/user/sync` |
 | `FNS_CLIENT_TYPE` | 可选，FNS `X-Client` 值；token scope 需允许该 client | `caldav-bridge` |
 | `FNS_CLIENT_NAME` | 可选，FNS `X-Client-Name` 值 | `caldav-bridge` |
-| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.7` |
-| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.7` |
+| `FNS_CLIENT_VERSION` | 可选，FNS `X-Client-Version` 值 | `0.1.8` |
+| `FNS_USER_AGENT` | 可选，FNS 请求 User-Agent | `caldav-task-bridge/0.1.8` |
 | `TASK_PATH_KEYWORD` | 可选，初始化扫描时用于 FNS path 搜索的关键词 | `Tasks` |
 | `SYNC_STATE_PATH` | 可选，本服务同步状态文件路径 | `./data/state.json` |
 | `PUSH_INTERVAL` | 可选，Vault → CalDAV reconciliation 间隔（秒） | `900` |
@@ -344,7 +345,7 @@ docker run --rm --env-file .env caldav-task-bridge:local python scripts/smoke_te
 推荐发布时同时推送语义版本、短 SHA 和 `latest`：
 
 ```bash
-VERSION=0.1.7
+VERSION=0.1.8
 SHA=$(git rev-parse --short HEAD)
 
 docker build --network=host \

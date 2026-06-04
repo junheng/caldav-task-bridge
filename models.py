@@ -363,7 +363,7 @@ def updates_from_caldav_component(component: Any, today: date | None = None) -> 
     if component.name == "VTODO":
         priority = component.get("PRIORITY")
         if priority is not None:
-            updates["priority"] = str(caldav_priority_to_obsidian(priority))
+            updates["priority"] = caldav_priority_to_obsidian(priority)
         due = _component_date(component, "DUE")
         if due:
             updates["due_date"] = due.isoformat()

@@ -54,7 +54,7 @@ body
 
         client.patch_frontmatter(
             "Tasks/Done.md",
-            {"task_status": "已完成", "done_date": date(2026, 6, 3)},
+            {"task_status": "已完成", "done_date": date(2026, 6, 3), "priority": 2, "tags": ["type/task", "work"]},
         )
 
         call = session.calls[0]
@@ -65,8 +65,10 @@ body
         self.assertEqual(call["headers"]["X-Client-Name"], "caldav-bridge")  # type: ignore[index]
         self.assertEqual(call["json"]["vault"], "Core")  # type: ignore[index]
         self.assertEqual(call["json"]["path"], "Tasks/Done.md")  # type: ignore[index]
-        self.assertEqual(call["json"]["updates"]["task_status"], ["已完成"])  # type: ignore[index]
-        self.assertEqual(call["json"]["updates"]["done_date"], ["2026-06-03"])  # type: ignore[index]
+        self.assertEqual(call["json"]["updates"]["task_status"], "已完成")  # type: ignore[index]
+        self.assertEqual(call["json"]["updates"]["done_date"], "2026-06-03")  # type: ignore[index]
+        self.assertEqual(call["json"]["updates"]["priority"], 2)  # type: ignore[index]
+        self.assertEqual(call["json"]["updates"]["tags"], ["type/task", "work"])  # type: ignore[index]
 
     def test_all_fns_requests_have_client_headers(self) -> None:
         session = FakeSession()

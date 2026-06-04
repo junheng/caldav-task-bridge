@@ -101,7 +101,7 @@ class ModelMappingTests(unittest.TestCase):
         self.assertEqual(updates["due_date"], "2026-06-10")
 
     def test_completed_vtodo_maps_to_fns_frontmatter_updates(self) -> None:
-        task = Task(path="Tasks/Done.md", title="Done", status="已完成")
+        task = Task(path="Tasks/Done.md", title="Done", status="已完成", priority=1)
         calendar = Calendar.from_ical(task_to_vtodo_ics(task, "Core"))
         todo = next(component for component in calendar.walk() if component.name == "VTODO")
 
@@ -109,6 +109,7 @@ class ModelMappingTests(unittest.TestCase):
 
         self.assertEqual(updates["task_status"], "已完成")
         self.assertEqual(updates["done_date"], "2026-06-03")
+        self.assertEqual(updates["priority"], 1)
 
     def test_component_obsidian_path_can_fall_back_to_url(self) -> None:
         task = Task(path="Tasks/Linked.md", title="Linked")

@@ -157,7 +157,7 @@ class FnsClient:
         payload = {
             "vault": self.vault,
             "path": normalize_path(path),
-            "updates": {key: _fns_value_list(value) for key, value in updates.items()},
+            "updates": {key: _fns_api_value(value) for key, value in updates.items()},
             "remove": remove or [],
         }
         data = self._request("PATCH", "/note/frontmatter", json=payload)
@@ -266,12 +266,12 @@ def _has_next_page(page: int, item_count: int, pager: dict[str, Any]) -> bool:
     return page * page_size < total
 
 
-def _fns_value_list(value: Any) -> list[str]:
+def _fns_api_value(value: Any) -> Any:
     if value is None:
         return []
     if isinstance(value, list | tuple | set):
-        return [str(_format_value(item)) for item in value]
-    return [str(_format_value(value))]
+        return [_format_value(item) for item in value]
+    return _format_value(value)
 
 
 def _format_value(value: Any) -> Any:
