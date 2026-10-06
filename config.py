@@ -49,6 +49,7 @@ class Settings:
     fns_client_name: str = "caldav-bridge"
     fns_client_version: str | None = None
     fns_user_agent: str | None = None
+    archive_prefixes: tuple[str, ...] = ("04 - Archives/",)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -72,4 +73,5 @@ class Settings:
             fns_client_name=_optional("FNS_CLIENT_NAME", "caldav-bridge") or "caldav-bridge",
             fns_client_version=_optional("FNS_CLIENT_VERSION"),
             fns_user_agent=_optional("FNS_USER_AGENT"),
+            archive_prefixes=tuple(p.strip() for p in os.getenv("ARCHIVE_PREFIXES", "04 - Archives/").split(",") if p.strip()),
         )

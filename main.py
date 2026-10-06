@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -52,6 +53,7 @@ def build_services(settings: Settings) -> tuple[PushService, PullService]:
         fns_ws=fns_ws,
         tasks_collection=settings.tasks_collection,
         events_collection=settings.events_collection,
+        archive_prefixes=settings.archive_prefixes,
     )
     pull_service = PullService(
         fns,
@@ -59,6 +61,7 @@ def build_services(settings: Settings) -> tuple[PushService, PullService]:
         state,
         tasks_collection=settings.tasks_collection,
         events_collection=settings.events_collection,
+        archive_prefixes=settings.archive_prefixes,
     )
     return push_service, pull_service
 
@@ -113,7 +116,13 @@ def _pull_saw_remote_changes(stats: object) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Obsidian FNS <-> CalDAV task bridge")
-    parser.add_argument("--once", choices=["push", "pull", "both"], help="Run one sync cycle and exit")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--once", choices=["push", "pull", "both"], help="Run one sync cycle and exit")
+    modes.add_argument("--preview", action="store_true", help="Print a read-only lifecycle plan as JSON")
+    modes.add_argument("--apply-preview", metavar="JSON_FILE", help="Apply a reviewed lifecycle plan during maintenance")
+    modes.add_argument("--restore", metavar="NOTE_PATH", help="Explicitly restore a source already marked ACTIVE")
+    parser.add_argument("--backup-dir", help="New backup directory required by --apply-preview")
+    parser.add_argument("--approve-review", action="append", default=[], metavar="NOTE_PATH", help="Explicitly retire a reviewed non-task from the preview")
     parser.add_argument("--log-level", default="INFO", help="Python logging level")
     return parser.parse_args()
 
@@ -123,12 +132,36 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     settings = Settings.from_env()
     push_service, pull_service = build_services(settings)
+    if args.preview:
+        from migration import preview
+        print(json.dumps(preview(push_service), ensure_ascii=False, indent=2, default=str))
+        return
     if settings.radicale_rabbitmq_url:
         LOG.info("RADICALE_RABBITMQ_URL is configured but RabbitMQ hook consumption is not implemented in this MVP")
-    if args.once:
-        run_once(args.once, push_service, pull_service)
-    else:
-        run_forever(settings, push_service, pull_service)
+    with push_service.state.exclusive():
+        push_service.state.data = SyncState.load(settings.sync_state_path).data
+        if args.apply_preview:
+            from migration import apply_preview
+            if not args.backup_dir:
+                raise ValueError("--backup-dir is required for a reviewed migration")
+            with open(args.apply_preview, encoding="utf-8") as handle:
+                report = json.load(handle)
+            result = apply_preview(report, push_service, args.backup_dir, approve_reviews=tuple(args.approve_review))
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        elif args.restore:
+            from lifecycle import Lifecycle, classify_note
+            from models import normalize_path
+            path = normalize_path(args.restore)
+            note = push_service.fns.get_note(path)
+            if classify_note(path, note.frontmatter, archive_prefixes=settings.archive_prefixes).kind != Lifecycle.ACTIVE:
+                raise ValueError("First explicitly restore valid task identity/status and resolve cancellation evidence in Obsidian")
+            push_service.state.restore(path)
+            push_service.state.save()
+            push_service.run_once(paths=[path])
+        elif args.once:
+            run_once(args.once, push_service, pull_service)
+        else:
+            run_forever(settings, push_service, pull_service)
 
 
 if __name__ == "__main__":

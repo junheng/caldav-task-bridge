@@ -15,14 +15,15 @@ STATUS_TO_CALDAV = {
     "待办": "NEEDS-ACTION",
     "进行中": "IN-PROCESS",
     "已完成": "COMPLETED",
-    "阻塞": "CANCELLED",
+    "阻塞": "NEEDS-ACTION",
+    "已取消": "CANCELLED",
 }
 
 CALDAV_TO_STATUS = {
     "NEEDS-ACTION": "待办",
     "IN-PROCESS": "进行中",
     "COMPLETED": "已完成",
-    "CANCELLED": "阻塞",
+    "CANCELLED": "已取消",
 }
 
 PRIORITY_TO_CALDAV = {1: 1, 2: 5, 3: 9}
@@ -106,6 +107,8 @@ def caldav_priority_to_obsidian(value: Any) -> int:
         priority = int(value)
     except (TypeError, ValueError):
         return 2
+    if priority == 0:
+        return 2
     if priority <= 3:
         return 1
     if priority >= 7:
@@ -125,11 +128,16 @@ class Task:
     related_project: str | None = None
     tags: list[str] = field(default_factory=list)
     deleted: bool = False
+    done_date: date | None = None
+    remote_task_uid: str | None = None
+    remote_event_uid: str | None = None
 
     @classmethod
     def from_frontmatter(cls, path: str, frontmatter: dict[str, Any]) -> "Task":
         normalized = normalize_path(path)
-        status = _optional_str(frontmatter.get("task_status")) or "待办"
+        status = _optional_str(frontmatter.get("task_status"))
+        if status not in STATUS_TO_CALDAV:
+            raise ValueError("Task requires a valid explicit task_status")
         return cls(
             path=normalized,
             title=title_from_path(normalized),
@@ -141,15 +149,16 @@ class Task:
             related_project=_optional_str(frontmatter.get("related_project")),
             tags=coerce_tags(frontmatter.get("tags")),
             deleted=coerce_bool(frontmatter.get("deleted")),
+            done_date=parse_date(frontmatter.get("done_date")),
         )
 
     @property
     def task_uid(self) -> str:
-        return task_uid(self.path)
+        return self.remote_task_uid or task_uid(self.path)
 
     @property
     def event_uid(self) -> str:
-        return event_uid(self.path)
+        return self.remote_event_uid or event_uid(self.path)
 
     @property
     def is_completed(self) -> bool:
@@ -173,17 +182,8 @@ def _first_scalar(value: Any) -> Any:
 
 
 def is_task_note(path: str, content: str, frontmatter: dict[str, Any]) -> bool:
-    tags = set(coerce_tags(frontmatter.get("tags")))
-    note_type = (_optional_str(frontmatter.get("type")) or "").strip().lower()
-    normalized = normalize_path(path)
-    return (
-        "task_status" in frontmatter
-        or "type/task" in tags
-        or note_type == "task"
-        or normalized.startswith("Tasks/")
-        or "/Tasks/" in normalized
-        or "type/task" in content
-    )
+    from lifecycle import Lifecycle, classify_note
+    return classify_note(path, frontmatter).kind in {Lifecycle.ACTIVE, Lifecycle.COMPLETED}
 
 
 def task_to_vtodo_ics(
@@ -199,19 +199,23 @@ def task_to_vtodo_ics(
     todo = Todo()
     todo.add("uid", task.task_uid)
     todo.add("summary", task.title)
-    todo.add("status", STATUS_TO_CALDAV.get(task.status, "NEEDS-ACTION"))
+    todo.add("status", STATUS_TO_CALDAV[task.status])
     todo.add("priority", PRIORITY_TO_CALDAV.get(task.priority, 5))
     todo.add("description", build_description(task, vault_name, note_content=note_content))
     _add_link_properties(todo, link)
     todo.add("x-obsidian-path", task.path)
+    todo.add("x-bridge-policy-version", "2")
+    if task.status == "阻塞":
+        todo.add("x-obsidian-task-status", "BLOCKED")
     if task.tags:
         todo.add("categories", task.tags)
     if task.due_date:
         todo.add("due", task.due_date)
     if task.scheduled_date:
         todo.add("dtstart", task.scheduled_date)
-    if task.is_completed:
-        todo.add("completed", now)
+    if task.is_completed and task.done_date:
+        completed = datetime.combine(task.done_date, time.min, tzinfo=timezone.utc)
+        todo.add("completed", completed)
     calendar.add_component(todo)
     return calendar.to_ical().decode("utf-8")
 
@@ -223,7 +227,7 @@ def task_to_vevent_ics(
     *,
     note_content: str = "",
 ) -> str | None:
-    if task.due_date is None:
+    if task.due_date is None or task.status in {"已完成", "已取消"}:
         return None
     today = today or date.today()
     overdue = task.due_date < today and not task.is_completed
@@ -239,6 +243,7 @@ def task_to_vevent_ics(
     _add_link_properties(event, link)
     event.add("status", "CANCELLED" if task.is_completed else "CONFIRMED")
     event.add("x-obsidian-path", task.path)
+    event.add("x-bridge-policy-version", "2")
     calendar.add_component(event)
     return calendar.to_ical().decode("utf-8")
 
@@ -349,16 +354,30 @@ def _path_from_parsed_obsidian_url(parsed: Any) -> str | None:
     return None
 
 
-def updates_from_caldav_component(component: Any, today: date | None = None) -> dict[str, Any]:
+def updates_from_caldav_component(component: Any, today: date | None = None, *,
+                                  current_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
     today = today or date.today()
     updates: dict[str, Any] = {}
     status = _component_text(component, "STATUS")
-    if status:
+    if status and component.name == "VTODO":
         mapped_status = CALDAV_TO_STATUS.get(status.upper())
+        current = current_frontmatter or {}
+        local_status = _optional_str(current.get("task_status"))
+        if status.upper() == "CANCELLED" and _component_text(component, "X-BRIDGE-POLICY-VERSION") != "2":
+            if local_status == "阻塞":
+                mapped_status = "阻塞"
+            else:
+                raise ValueError("legacy CANCELLED has ambiguous task semantics")
+        if status.upper() == "NEEDS-ACTION" and (local_status == "阻塞" or
+                _component_text(component, "X-OBSIDIAN-TASK-STATUS") == "BLOCKED"):
+            mapped_status = "阻塞"
         if mapped_status:
             updates["task_status"] = mapped_status
             if mapped_status == "已完成":
-                updates["done_date"] = today.isoformat()
+                if not current.get("done_date"):
+                    updates["done_date"] = (_component_date(component, "COMPLETED") or today).isoformat()
+            elif mapped_status == "已取消" and not current.get("cancelled_date"):
+                updates["cancelled_date"] = today.isoformat()
 
     if component.name == "VTODO":
         priority = component.get("PRIORITY")

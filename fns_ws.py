@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse, urlunparse
+from uuid import uuid4
 
 from models import normalize_path
 
@@ -70,6 +71,8 @@ class FnsWebSocketClient:
         return self.note_sync_since(_now_millis(), context="caldav-bridge-bootstrap").last_time
 
     def note_sync_since(self, last_time: int | None, *, context: str = "caldav-bridge") -> NoteSyncResult:
+        # FNS keys its download cache by context; concurrent clients must not share it.
+        context = f"{context}-{uuid4().hex}"
         ws = self._connect()
         try:
             self._send_raw(ws, "Authorization", self.token)
@@ -96,7 +99,7 @@ class FnsWebSocketClient:
                     "missingNotes": [],
                 },
             )
-            return self._read_note_sync_result(ws)
+            return self._read_note_sync_result(ws, context=context)
         finally:
             ws.close()
 
@@ -121,27 +124,60 @@ class FnsWebSocketClient:
             headers.append(f"User-Agent: {self.user_agent}")
         return headers
 
-    def _read_note_sync_result(self, ws: WebSocketLike) -> NoteSyncResult:
+    def _read_note_sync_result(self, ws: WebSocketLike, *, context: str) -> NoteSyncResult:
         messages: list[NoteSyncMessage] = []
+        received = 0
         end_data: dict[str, Any] | None = None
         while end_data is None:
-            action, data = self._recv_success(ws)
+            action, data = self._recv_success(ws, context=context)
             if action == "NoteSyncEnd":
                 end_data = data
                 break
             message = _note_sync_message(action, data)
             if message:
                 messages.append(message)
-        expected_after_end = _note_sync_message_count(end_data)
-        for _ in range(expected_after_end):
-            action, data = self._recv_success(ws)
+                received += 1
+        expected = _note_sync_message_count(end_data)
+        page: dict[str, Any] | None = None
+        page_remaining = 0
+        if received < expected:
+            self._ack_page(ws, context, -1)
+        while received < expected:
+            action, data = self._recv_success(ws, context=context)
+            if action == "NoteSyncPage":
+                if page_remaining:
+                    raise FnsWsError("FNS sent a new page before finishing the previous page")
+                page = data
+                page_remaining = _optional_int(data.get("totalCount")) or 0
+                if page_remaining <= 0 or _optional_int(data.get("pageIndex")) is None:
+                    raise FnsWsError("Invalid FNS NoteSyncPage metadata")
+                continue
+            if action not in {"NoteSyncModify", "NoteSyncDelete", "NoteSyncRename", "NoteSyncMtime", "NoteSyncNeedPush"}:
+                raise FnsWsError(f"Unexpected FNS sync action: {action}")
+            received += 1
             message = _note_sync_message(action, data)
             if message:
                 messages.append(message)
+            if page is not None:
+                page_remaining -= 1
+                if page_remaining == 0:
+                    if page.get("isLast"):
+                        if received != expected:
+                            raise FnsWsError("FNS final page does not match NoteSyncEnd counts")
+                    else:
+                        if received >= expected:
+                            raise FnsWsError("FNS sync counts ended before the final page")
+                        self._ack_page(ws, context, int(page["pageIndex"]))
+                    page = None
+        if page_remaining:
+            raise FnsWsError("FNS sync counts ended before completing the page")
         last_time = _optional_int(end_data.get("lastTime"))
         if last_time is None:
             raise FnsWsError(f"FNS NoteSyncEnd did not include lastTime: {end_data!r}")
         return NoteSyncResult(last_time=last_time, messages=messages)
+
+    def _ack_page(self, ws: WebSocketLike, context: str, page_index: int) -> None:
+        self._send_json(ws, "NoteSyncPageAck", {"context": context, "vault": self.vault, "pageIndex": page_index})
 
     def _expect_success(self, ws: WebSocketLike, expected_action: str) -> dict[str, Any]:
         action, data = self._recv_success(ws)
@@ -149,19 +185,41 @@ class FnsWebSocketClient:
             raise FnsWsError(f"Expected FNS WS action {expected_action}, got {action}")
         return data
 
-    def _recv_success(self, ws: WebSocketLike) -> tuple[str, dict[str, Any]]:
-        action, payload = self._recv(ws)
-        if not isinstance(payload, dict):
-            raise FnsWsError(f"FNS WS action {action} returned non-object payload")
-        if payload.get("status") is False or payload.get("code") == 0:
-            raise FnsWsError(f"FNS WS action {action} failed: {payload.get('message') or payload}")
-        data = payload.get("data", payload)
-        if not isinstance(data, dict):
-            raise FnsWsError(f"FNS WS action {action} returned non-object data")
-        return action, data
+    def _recv_success(self, ws: WebSocketLike, *, context: str | None = None) -> tuple[str, dict[str, Any]]:
+        deadline = time.monotonic() + self.timeout
+        while True:
+            action, payload = self._recv(ws, deadline=deadline)
+            if not isinstance(payload, dict):
+                raise FnsWsError(f"FNS WS action {action} returned non-object payload")
+            if context and payload.get("context") not in (None, "", context):
+                continue
+            if payload.get("status") is False or payload.get("code") == 0:
+                raise FnsWsError(f"FNS WS action {action} failed: {payload.get('message') or payload}")
+            data = payload.get("data", payload)
+            if not isinstance(data, dict):
+                raise FnsWsError(f"FNS WS action {action} returned non-object data")
+            return action, data
 
-    def _recv(self, ws: WebSocketLike) -> tuple[str, Any]:
-        raw = ws.recv()
+    def _recv(self, ws: WebSocketLike, *, deadline: float | None = None) -> tuple[str, Any]:
+        deadline = deadline if deadline is not None else time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise FnsWsError("Timed out waiting for FNS sync data")
+            set_timeout = getattr(ws, "settimeout", None)
+            if set_timeout:
+                set_timeout(remaining)
+            recv_data = getattr(ws, "recv_data", None)
+            if recv_data:
+                # Expose ping/pong frames so they cannot reset the data wait indefinitely.
+                opcode, raw = recv_data(control_frame=True)
+                if opcode in {9, 10}:
+                    continue
+                if opcode == 8:
+                    raise FnsWsError("FNS closed the WebSocket during sync")
+            else:
+                raw = ws.recv()
+            break
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
         if "|" not in raw:

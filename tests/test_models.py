@@ -7,6 +7,7 @@ from icalendar import Calendar
 
 from models import (
     Task,
+    caldav_priority_to_obsidian,
     component_obsidian_path,
     display_metadata_value,
     note_body_excerpt,
@@ -18,6 +19,20 @@ from models import (
 
 
 class ModelMappingTests(unittest.TestCase):
+    def test_caldav_unspecified_priority_is_not_high_priority(self) -> None:
+        self.assertEqual(caldav_priority_to_obsidian(0), 2)
+
+    def test_cancelled_calendar_projection_does_not_block_completed_task(self) -> None:
+        task = Task(path="Tasks/Done.md", title="Done", status="待办", due_date=date(2026, 6, 10))
+        calendar = Calendar.from_ical(task_to_vevent_ics(task, "Core"))
+        event = next(component for component in calendar.walk() if component.name == "VEVENT")
+        event["STATUS"] = "CANCELLED"
+        event["DTSTART"].dt = date(2026, 6, 12)
+
+        updates = updates_from_caldav_component(event)
+
+        self.assertEqual(updates, {"due_date": "2026-06-12"})
+
     def test_task_from_frontmatter_accepts_single_value_lists_from_fns(self) -> None:
         task = Task.from_frontmatter(
             "Tasks/ListValues.md",
@@ -105,11 +120,17 @@ class ModelMappingTests(unittest.TestCase):
         calendar = Calendar.from_ical(task_to_vtodo_ics(task, "Core"))
         todo = next(component for component in calendar.walk() if component.name == "VTODO")
 
+        todo.pop("COMPLETED", None)
         updates = updates_from_caldav_component(todo, today=date(2026, 6, 3))
 
         self.assertEqual(updates["task_status"], "已完成")
         self.assertEqual(updates["done_date"], "2026-06-03")
         self.assertEqual(updates["priority"], 1)
+
+    def test_terminal_tasks_do_not_generate_calendar_projections(self) -> None:
+        for status in ("已完成", "已取消"):
+            task = Task(path="Tasks/Done.md", title="Done", status=status, due_date=date(2026, 6, 10))
+            self.assertIsNone(task_to_vevent_ics(task, "Core"))
 
     def test_component_obsidian_path_can_fall_back_to_url(self) -> None:
         task = Task(path="Tasks/Linked.md", title="Linked")

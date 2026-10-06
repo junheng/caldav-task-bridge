@@ -72,6 +72,20 @@ class CalDavClientTests(unittest.TestCase):
 
         self.assertEqual(session.calls[0][1]["headers"]["If-Match"], '"old"')  # type: ignore[index]
 
+    def test_creation_is_conditional_and_does_not_overwrite_unknown_objects(self) -> None:
+        session = FakeSession()
+        client = CalDavClient("http://radicale:5232", "user", "pass", session=session)
+        with self.assertRaises(PreconditionFailed):
+            client.put_object("/diomgis/tasks/", "task-abc@core-vault", "ics")
+        self.assertEqual(session.calls[0][1]["headers"]["If-None-Match"], "*")
+
+    def test_delete_requires_etag_and_foreign_href_is_rejected(self) -> None:
+        client = CalDavClient("http://radicale:5232", "user", "pass")
+        with self.assertRaises(ValueError):
+            client.delete_href("/diomgis/tasks/a.ics", if_match=None)
+        with self.assertRaises(ValueError):
+            client.get_object("https://other.example/diomgis/tasks/a.ics")
+
 
 if __name__ == "__main__":
     unittest.main()

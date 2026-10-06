@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -133,6 +135,56 @@ class SyncState:
 
     def forget_uid(self, uid: str) -> None:
         self.data["uid_paths"].pop(uid, None)
+
+    def note_record(self, path: str) -> dict[str, Any]:
+        return self.data.setdefault("lifecycle", {}).setdefault("notes", {}).setdefault(path, {})
+
+    def review(self, path: str, reason: str) -> None:
+        self.data.setdefault("lifecycle", {}).setdefault("reviews", {})[path] = reason
+
+    def clear_review(self, path: str) -> None:
+        self.data.setdefault("lifecycle", {}).setdefault("reviews", {}).pop(path, None)
+
+    def object_records(self) -> dict[str, dict[str, Any]]:
+        return self.data.setdefault("lifecycle", {}).setdefault("objects", {})
+
+    def remember_object(self, uid: str, path: str, collection: str, href: str, kind: str) -> None:
+        self.remember_uid(uid, path)
+        self.object_records().setdefault(uid, {}).update({"path": path, "collection": collection, "href": href, "kind": kind})
+
+    def retirement(self, path: str) -> dict[str, Any] | None:
+        return self.data.get("lifecycle", {}).get("retirements", {}).get(path)
+
+    def begin_retirement(self, path: str, reason: str, *, kinds: tuple[str, ...]) -> dict[str, Any]:
+        records = self.data.setdefault("lifecycle", {}).setdefault("retirements", {})
+        record = records.setdefault(path, {"reason": reason, "kinds": [], "progress": {}})
+        record["reason"] = reason
+        record["kinds"] = sorted(set(record["kinds"]) | set(kinds))
+        return record
+
+    def pending_pull(self) -> dict[str, dict[str, Any]]:
+        return self.data.setdefault("lifecycle", {}).setdefault("pending_pull", {})
+
+    def restore(self, path: str) -> None:
+        """Only the explicit restore CLI calls this; normal sync never does."""
+        self.data.setdefault("lifecycle", {}).setdefault("retirements", {}).pop(path, None)
+        self.note_record(path).pop("terminal", None)
+        self.data.setdefault("lifecycle", {}).setdefault("approved_exclusions", {}).pop(path, None)
+        self.clear_review(path)
+        self.add_fns_pending_note_change(path)
+
+    @contextmanager
+    def exclusive(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(self.path.suffix + ".lock").open("a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("Another bridge process owns state; stop it before maintenance") from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _collection(self, collection: str) -> dict[str, Any]:
         collections = self.data.setdefault("collections", {})

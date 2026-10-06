@@ -19,7 +19,9 @@ DEFAULT_CLIENT_NAME = "caldav-bridge"
 
 
 class FnsError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -36,9 +38,12 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
     match = FRONTMATTER_RE.match(content)
     if not match:
         return {}
-    loaded = yaml.safe_load(match.group(1)) or {}
+    try:
+        loaded = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError as exc:
+        raise FnsError("Invalid YAML frontmatter") from exc
     if not isinstance(loaded, dict):
-        return {}
+        raise FnsError("Frontmatter must be a mapping")
     return loaded
 
 
@@ -207,7 +212,8 @@ class FnsClient:
             raise FnsError(f"FNS {method} {endpoint} returned non-JSON response") from exc
         if isinstance(payload, dict):
             if payload.get("status") is False or payload.get("code") == 0:
-                raise FnsError(f"FNS {method} {endpoint} failed: {payload.get('message') or payload}")
+                raise FnsError(f"FNS {method} {endpoint} failed: {payload.get('message') or payload}",
+                               code=payload.get("code"))
             return payload.get("data", payload)
         return payload
 

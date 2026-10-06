@@ -42,6 +42,13 @@ class PutResult:
     created: bool
 
 
+@dataclass(frozen=True)
+class RemoteObject:
+    href: str
+    etag: str
+    ics_text: str
+
+
 class CalDavClient:
     def __init__(
         self,
@@ -58,10 +65,15 @@ class CalDavClient:
         self.timeout = timeout
 
     def put_object(self, collection: str, uid: str, ics_text: str, *, if_match: str | None = None) -> PutResult:
-        url = self.object_url(collection, uid)
+        return self.put_href(self.object_href(collection, uid), ics_text, if_match=if_match)
+
+    def put_href(self, href: str, ics_text: str, *, if_match: str | None = None) -> PutResult:
+        url = self._href_to_url(href)
         headers = {"Content-Type": "text/calendar; charset=utf-8"}
         if if_match:
             headers["If-Match"] = if_match
+        else:
+            headers["If-None-Match"] = "*"
         response = self.session.put(
             url,
             data=ics_text.encode("utf-8"),
@@ -77,6 +89,17 @@ class CalDavClient:
 
     def delete_object(self, collection: str, uid: str, *, if_match: str | None = None) -> bool:
         url = self.object_url(collection, uid)
+        if not if_match:
+            remote = self.get_object(self.object_href(collection, uid))
+            if remote is None:
+                return False
+            if_match = remote.etag
+        return self.delete_href(_href_from_url(url), if_match=if_match)
+
+    def delete_href(self, href: str, *, if_match: str) -> bool:
+        if not if_match:
+            raise ValueError("An ETag is required for deletion")
+        url = self._href_to_url(href)
         headers = {"If-Match": if_match} if if_match else None
         response = self.session.delete(url, headers=headers, timeout=self.timeout)
         if response.status_code == 404:
@@ -86,6 +109,17 @@ class CalDavClient:
         if response.status_code not in {200, 202, 204}:
             raise WebDavError(f"DELETE {url} failed with HTTP {response.status_code}: {response.text}")
         return True
+
+    def get_object(self, href: str) -> RemoteObject | None:
+        response = self.session.get(self._href_to_url(href), timeout=self.timeout)
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise WebDavError(f"GET {href} failed with HTTP {response.status_code}")
+        etag = response.headers.get("ETag")
+        if not etag:
+            raise WebDavError(f"GET {href} did not provide an ETag")
+        return RemoteObject(href, etag, response.text)
 
     def object_href(self, collection: str, uid: str) -> str:
         return _href_from_url(self.object_url(collection, uid))
@@ -181,6 +215,9 @@ class CalDavClient:
     def _href_to_url(self, href: str) -> str:
         parsed = urlparse(href)
         if parsed.scheme:
+            base = urlparse(self.base_url)
+            if (parsed.scheme, parsed.netloc) != (base.scheme, base.netloc):
+                raise ValueError("CalDAV href points outside the configured server")
             return href
         return urljoin(f"{self.base_url}/", href.lstrip("/"))
 

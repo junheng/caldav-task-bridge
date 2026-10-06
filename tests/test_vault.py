@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from vault import FnsClient, parse_frontmatter
+from vault import FnsClient, FnsError, parse_frontmatter
 
 
 class FakeResponse:
@@ -36,6 +36,15 @@ class SequenceSession:
 
 
 class VaultTests(unittest.TestCase):
+    def test_template_yaml_error_is_a_retryable_note_read_failure(self) -> None:
+        session = SequenceSession([
+            {"path": "Templates/Weekly.md", "content": "---\nweek_number: {{week_number_numeric}}\n---\n"},
+        ])
+        client = FnsClient("https://fns.example.com", "token-1", "Core", session=session)  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(FnsError, "Invalid YAML frontmatter"):
+            client.get_note("Templates/Weekly.md")
+
     def test_parse_frontmatter(self) -> None:
         content = """---
 task_status: 待办
